@@ -1,0 +1,156 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+  IMAGE_NAME: st-orders-api
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.set-tag.outputs.image_tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get ACR name
+        id: acr
+        run: |
+          ACR_NAME=$(az acr list --resource-group $RESOURCE_GROUP --query "[0].name" -o tsv)
+          echo "ACR_NAME=$ACR_NAME" >> $GITHUB_ENV
+
+      - name: ACR login
+        run: az acr login --name $ACR_NAME
+
+      - name: Set image tag
+        id: set-tag
+        run: |
+          IMAGE_TAG=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t $ACR_NAME.azurecr.io/$IMAGE_NAME:$IMAGE_TAG .
+          docker push $ACR_NAME.azurecr.io/$IMAGE_NAME:$IMAGE_TAG
+
+  deploy-infrastructure:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get ACR login server
+        id: acr
+        run: |
+          ACR_LOGIN_SERVER=$(az acr list --resource-group $RESOURCE_GROUP --query "[0].loginServer" -o tsv)
+          echo "ACR_LOGIN_SERVER=$ACR_LOGIN_SERVER" >> $GITHUB_ENV
+
+      - name: Deploy Bicep infrastructure
+        run: |
+          az deployment group create \
+            --resource-group $RESOURCE_GROUP \
+            --template-file infra/main.bicep \
+            --parameters \
+              environmentName=apim-mcp-dev \
+              publisherEmail=${{ secrets.PUBLISHER_EMAIL }} \
+              publisherName='ST Micro Orders Admin' \
+              postgresAdminPassword=${{ secrets.POSTGRES_ADMIN_PASSWORD }} \
+              containerImage=$ACR_LOGIN_SERVER/$IMAGE_NAME:${{ needs.build-and-push.outputs.image_tag }}
+
+  deploy-app:
+    runs-on: ubuntu-latest
+    needs:
+      - deploy-infrastructure
+      - build-and-push
+
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get container app name
+        run: |
+          APP_NAME=$(az containerapp list --resource-group $RESOURCE_GROUP --query "[0].name" -o tsv)
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
+
+      - name: Get ACR login server
+        run: |
+          ACR_SERVER=$(az acr list --resource-group $RESOURCE_GROUP --query "[0].loginServer" -o tsv)
+          echo "ACR_SERVER=$ACR_SERVER" >> $GITHUB_ENV
+
+      - name: Update container app image
+        run: |
+          az containerapp update \
+            --name $APP_NAME \
+            --resource-group $RESOURCE_GROUP \
+            --image $ACR_SERVER/$IMAGE_NAME:${{ needs.build-and-push.outputs.image_tag }}
+
+  configure-apim:
+    runs-on: ubuntu-latest
+    needs: deploy-app
+
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get container app URL
+        run: |
+          APP_URL=$(az containerapp show \
+            --resource-group $RESOURCE_GROUP \
+            --name $(az containerapp list --resource-group $RESOURCE_GROUP --query "[0].name" -o tsv) \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          echo "APP_URL=$APP_URL" >> $GITHUB_ENV
+
+      - name: Wait for health endpoint
+        run: |
+          for i in $(seq 1 10); do
+            echo "Health check attempt $i/10..."
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://$APP_URL/health" || true)
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check passed."
+              exit 0
+            fi
+            echo "Health check returned $STATUS. Retrying in 15s..."
+            sleep 15
+          done
+          echo "Health check failed after 10 attempts."
+          exit 1
+
+      - name: Get APIM service name
+        run: |
+          APIM_NAME=$(az apim list --resource-group $RESOURCE_GROUP --query "[0].name" -o tsv)
+          echo "APIM_NAME=$APIM_NAME" >> $GITHUB_ENV
+
+      - name: Import OpenAPI spec into APIM
+        run: |
+          az apim api import \
+            --resource-group $RESOURCE_GROUP \
+            --service-name $APIM_NAME \
+            --api-id st-orders-api \
+            --path orders \
+            --specification-format OpenApiJson \
+            --specification-url "https://$APP_URL/openapi.json" \
+            --display-name "ST Orders API" \
+            --protocols https
