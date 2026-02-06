@@ -9,7 +9,7 @@ ST Microelectronics semiconductor orders API deployed to Azure Container Apps, e
 graph LR
     Client[REST Client] -->|subscription key| APIM[Azure API Management]
     Claude[Claude Desktop] -->|MCP over HTTP| APIM
-    APIM -->|/orders/*| CA[Container App]
+    APIM -->|Entra ID token via MI| CA[Container App + Easy Auth]
     CA -->|SQLAlchemy| PG[(PostgreSQL)]
     DevPortal[Developer Portal] --> APIM
     ACR[Container Registry] -->|image pull| CA
@@ -149,7 +149,8 @@ az deployment group create \
 3. **Azure Container Registry** (Basic SKU) — hosts Docker images
 4. **PostgreSQL Flexible Server** (Burstable B1ms, v16, 32GB) + database `storders`
 5. **Container Apps Environment + Container App** — runs FastAPI on port 8000, min 1 / max 3 replicas
-6. **API Management** (Developer tier) — gateway for REST API + MCP
+6. **API Management** (Developer tier, system-assigned MI) — gateway for REST API + MCP, authenticates to Container App via Entra ID
+7. **Easy Auth** (Container App authConfig) — Entra ID token validation on Container App
 
 ### CI/CD (GitHub Actions)
 - **ci.yml**: Runs on PRs — lint with ruff, test with pytest
@@ -160,12 +161,36 @@ az deployment group create \
 - `AZURE_RESOURCE_GROUP` — resource group name
 - `POSTGRES_ADMIN_PASSWORD` — PostgreSQL admin password
 - `PUBLISHER_EMAIL` — APIM publisher email
+- `AUTH_CLIENT_ID` — Entra ID App Registration client ID for Easy Auth
 
 ## APIM Configuration
 - API imported from Container App's `/openapi.json`
 - **Product**: "ST Orders API - Free" (100 calls/min, self-service subscription)
 - **Policies**: CORS (allow Developer Portal), rate limiting, backend URL routing
 - REST API available at: `https://<apim>.azure-api.net/orders/api/v1/*`
+
+## Authentication (Entra ID + Easy Auth)
+
+The Container App is secured with Microsoft Entra ID (Azure AD) authentication so it cannot be called directly, bypassing APIM.
+
+**Flow**: Client → APIM (subscription key) → APIM acquires Entra ID token via system-assigned managed identity → Container App validates token via Easy Auth → Backend
+
+### Components
+- **App Registration**: Created via `az ad app create --display-name "st-orders-api"` (not possible in Bicep — it's a Microsoft Graph object). The `appId` output is used as `authClientId`.
+- **APIM System-Assigned Managed Identity**: APIM uses its MI to acquire tokens for audience `api://<authClientId>` via `<authentication-managed-identity>` policy.
+- **Container App Easy Auth**: `Microsoft.App/containerApps/authConfigs` resource validates Entra ID tokens. Unauthenticated requests get 401.
+- **Excluded Paths**: `/health` and `/openapi.json` are excluded from auth for health probes and APIM OpenAPI import.
+
+### Required Parameter
+- `authClientId` — Client ID from the App Registration. Pass to Bicep deployment:
+  ```bash
+  az deployment group create ... --parameters authClientId=<app-registration-client-id>
+  ```
+
+### Verification
+1. Direct call (no token) → **401**: `curl https://<container-app>/api/v1/products`
+2. Health endpoint (excluded) → **200**: `curl https://<container-app>/health`
+3. Via APIM (token acquired automatically) → **200**: `curl -H "Ocp-Apim-Subscription-Key: <key>" https://<apim>/orders/api/v1/products`
 
 ## MCP Server
 

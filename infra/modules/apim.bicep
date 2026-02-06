@@ -21,6 +21,9 @@ resource apim 'Microsoft.ApiManagement/service@2023-09-01-preview' = {
     name: 'Developer'
     capacity: 1
   }
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     publisherEmail: publisherEmail
     publisherName: publisherName
@@ -35,3 +38,6 @@ output name string = apim.name
 
 @description('Gateway URL of the API Management instance.')
 output gatewayUrl string = apim.properties.gatewayUrl
+
+@description('Principal ID of the API Management system-assigned managed identity.')
+output principalId string = apim.identity.principalId

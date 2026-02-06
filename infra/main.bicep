@@ -27,6 +27,9 @@ param postgresAdminPassword string
 @description('Container image to deploy. Use a placeholder for initial deployment.')
 param containerImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
+@description('Client ID of the Entra ID App Registration for Easy Auth (from az ad app create).')
+param authClientId string
+
 // --------------------------------------------------------------------------
 // Variables
 // --------------------------------------------------------------------------
@@ -96,6 +99,7 @@ module containerApp 'modules/container-app.bicep' = {
     managedIdentityId: identity.outputs.id
     acrLoginServer: acr.outputs.loginServer
     databaseUrl: databaseUrl
+    authClientId: authClientId
   }
 }
 
@@ -120,6 +124,7 @@ module apimApi 'modules/apim-api.bicep' = {
   params: {
     apimName: apim.outputs.name
     apiBackendUrl: containerApp.outputs.url
+    authAudience: 'api://${authClientId}'
   }
 }
 

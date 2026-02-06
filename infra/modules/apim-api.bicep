@@ -8,6 +8,9 @@ param apimName string
 @description('Backend URL of the Container App (e.g., https://myapp.azurecontainerapps.io).')
 param apiBackendUrl string
 
+@description('Entra ID audience URI for managed identity authentication (e.g., api://<clientId>).')
+param authAudience string
+
 // --------------------------------------------------------------------------
 // Reference existing APIM instance
 // --------------------------------------------------------------------------
@@ -38,7 +41,7 @@ resource api 'Microsoft.ApiManagement/service/apis@2023-09-01-preview' = {
 // --------------------------------------------------------------------------
 // CORS Policy (allow Developer Portal)
 // --------------------------------------------------------------------------
-var corsPolicyXml = '<policies><inbound><base /><cors allow-credentials="true"><allowed-origins><origin>https://${apimName}.developer.azure-api.net</origin></allowed-origins><allowed-methods preflight-result-max-age="300"><method>GET</method><method>POST</method><method>PUT</method><method>DELETE</method><method>PATCH</method><method>OPTIONS</method></allowed-methods><allowed-headers><header>*</header></allowed-headers></cors></inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>'
+var corsPolicyXml = '<policies><inbound><base /><cors allow-credentials="true"><allowed-origins><origin>https://${apimName}.developer.azure-api.net</origin></allowed-origins><allowed-methods preflight-result-max-age="300"><method>GET</method><method>POST</method><method>PUT</method><method>DELETE</method><method>PATCH</method><method>OPTIONS</method></allowed-methods><allowed-headers><header>*</header></allowed-headers></cors><authentication-managed-identity resource="${authAudience}" /></inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>'
 
 resource apiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-09-01-preview' = {
   parent: api

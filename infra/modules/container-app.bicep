@@ -24,6 +24,9 @@ param databaseUrl string
 @description('Application environment name.')
 param environment string = 'production'
 
+@description('Client ID of the Entra ID App Registration for Easy Auth.')
+param authClientId string
+
 // --------------------------------------------------------------------------
 // Log Analytics Workspace
 // --------------------------------------------------------------------------
@@ -117,6 +120,42 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       scale: {
         minReplicas: 1
         maxReplicas: 3
+      }
+    }
+  }
+}
+
+// --------------------------------------------------------------------------
+// Easy Auth (Microsoft Entra ID)
+// --------------------------------------------------------------------------
+resource authConfig 'Microsoft.App/containerApps/authConfigs@2024-03-01' = {
+  parent: containerApp
+  name: 'current'
+  properties: {
+    platform: {
+      enabled: true
+    }
+    globalValidation: {
+      unauthenticatedClientAction: 'Return401'
+      excludedPaths: [
+        '/health'
+        '/openapi.json'
+      ]
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        registration: {
+          clientId: authClientId
+          openIdIssuer: 'https://sts.windows.net/${tenant().tenantId}/v2.0'
+        }
+        validation: {
+          defaultAuthorizationPolicy: {
+            allowedApplications: []
+          }
+          allowedAudiences: [
+            'api://${authClientId}'
+          ]
+        }
       }
     }
   }
