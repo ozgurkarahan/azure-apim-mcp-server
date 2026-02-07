@@ -1,7 +1,7 @@
 # CLAUDE.md — azure-apim-mcp-server
 
 ## Project Overview
-ST Microelectronics semiconductor orders API deployed to Azure Container Apps, exposed through Azure API Management as both a REST API and MCP (Model Context Protocol) server, with Developer Portal.
+Microelectronics semiconductor orders API deployed to Azure Container Apps, exposed through Azure API Management as both a REST API and MCP (Model Context Protocol) server, with Developer Portal.
 
 ## Architecture
 
@@ -15,6 +15,14 @@ graph LR
     ACR[Container Registry] -->|image pull| CA
 ```
 
+### Request Flows
+
+**REST API flow**: Client → APIM (`/orders/api/v1/*`, subscription key) → APIM acquires Entra ID token via system-assigned MI → Container App validates token via Easy Auth → FastAPI → PostgreSQL
+
+**MCP flow**: Claude Desktop → APIM (`/st-orders-mcp/mcp`, subscription key, Streamable HTTP) → APIM translates JSON-RPC tool calls into REST API operations → APIM acquires Entra ID token via MI → Container App → FastAPI → PostgreSQL → response flows back as JSON-RPC result
+
+**Key difference**: The MCP flow is handled entirely by APIM's native MCP gateway — no custom MCP code runs on the Container App. APIM receives JSON-RPC requests, maps tool names to REST operations, calls the backend, and wraps the response back into JSON-RPC format.
+
 ## Tech Stack
 
 | Component | Technology |
@@ -23,10 +31,12 @@ graph LR
 | Database | PostgreSQL 16 (Azure Flexible Server in prod, Docker locally) |
 | ORM | SQLAlchemy 2.0 (async) |
 | Migrations | Alembic |
-| MCP Server | Python `mcp` SDK (FastMCP) |
+| MCP Server (APIM) | APIM native MCP gateway (`apiType: 'mcp'`) — zero custom code |
+| MCP Server (local) | Python `mcp` SDK (FastMCP) — for stdio/local dev |
 | Infrastructure | Azure Bicep |
 | Hosting | Azure Container Apps |
 | API Gateway | Azure API Management (Developer tier) |
+| Auth | Microsoft Entra ID (Easy Auth + Managed Identity) |
 | CI/CD | GitHub Actions |
 | Container Registry | Azure Container Registry |
 | Secrets | Azure Key Vault |
@@ -126,7 +136,7 @@ All endpoints are under `/api/v1/`.
 **OrderStatus enum**: pending, confirmed, processing, shipped, delivered, cancelled
 
 ## Seed Data
-- **28 products** across ST Micro families: STM32F4, STM32L4, STM32H7, STM32G0, STM32F1, STM32WB, STM8S (MCUs), LIS/LSM/LPS/HTS (MEMS sensors), STF/STD (power MOSFETs), L78/ST1S (power management), L6/L298 (motor drivers), BlueNRG (wireless), TSV/TSH (op-amps)
+- **28 products** across Microelectronics families: STM32F4, STM32L4, STM32H7, STM32G0, STM32F1, STM32WB, STM8S (MCUs), LIS/LSM/LPS/HTS (MEMS sensors), STF/STD (power MOSFETs), L78/ST1S (power management), L6/L298 (motor drivers), BlueNRG (wireless), TSV/TSH (op-amps)
 - **10 customers**: Fictional electronics companies across Germany, Japan, USA, South Korea, China, UK, France, Italy, Sweden, Canada
 - **40 orders**: Distributed across statuses (~30% delivered, ~25% shipped, ~20% processing, ~15% confirmed, ~10% pending), 1-5 items each, spanning last 6 months
 
@@ -154,7 +164,25 @@ az deployment group create \
 4. **PostgreSQL Flexible Server** (Burstable B1ms, v16, 32GB) + database `storders`
 5. **Container Apps Environment + Container App** — runs FastAPI on port 8000, min 1 / max 3 replicas
 6. **API Management** (Developer tier, system-assigned MI) — gateway for REST API + MCP, authenticates to Container App via Entra ID
-7. **Easy Auth** (Container App authConfig) — Entra ID token validation on Container App
+7. **APIM REST API** (`st-orders-api`) — imported from OpenAPI spec, exposes `/orders/api/v1/*`
+8. **APIM MCP API** (`st-orders-mcp`, `apiType: 'mcp'`) — exposes 8 REST operations as MCP tools at `/st-orders-mcp/mcp`
+9. **Easy Auth** (Container App authConfig) — Entra ID token validation on Container App
+
+### Bicep Module Dependency Graph
+```
+identity ──┬── keyvault
+            ├── acr ──────────┐
+            │                  ▼
+apim ──────┬── containerApp (depends on: identity, acr, postgres, apim)
+            │       │
+            │       ▼
+            ├── apimApi (depends on: apim, containerApp)
+            │       │
+            │       ▼
+            └── apimMcp (depends on: apim, apimApi)
+
+postgres ──────────┘
+```
 
 ### CI/CD (GitHub Actions)
 - **ci.yml**: Runs on PRs — lint with ruff, test with pytest
@@ -170,8 +198,9 @@ az deployment group create \
 ## APIM Configuration
 - API imported from Container App's `/openapi.json`
 - **Product**: "ST Orders API - Free" (100 calls/min, self-service subscription)
-- **Policies**: CORS (allow Developer Portal), rate limiting, backend URL routing
+- **Policies**: CORS (allow Developer Portal), rate limiting, managed identity auth
 - REST API available at: `https://<apim>.azure-api.net/orders/api/v1/*`
+- MCP API available at: `https://<apim>.azure-api.net/st-orders-mcp/mcp`
 
 ## Authentication (Entra ID + Easy Auth)
 
@@ -236,8 +265,25 @@ az rest --method post --uri "https://management.azure.com/.../gateways/managed/l
 ### A. APIM-native MCP (Primary) — Zero custom code
 - APIM natively converts the imported REST API into an MCP server
 - Endpoint: `https://<apim>.azure-api.net/st-orders-mcp/mcp`
-- Transport: Streamable HTTP, auth via subscription key
-- Configured via Azure Portal: APIM > APIs > MCP Servers > Create
+- Transport: Streamable HTTP (JSON-RPC 2.0 over SSE), auth via subscription key
+- Deployed via Bicep: `infra/modules/apim-mcp.bicep` (uses `apiType: 'mcp'` + `type: 'mcp'` with API version `2025-03-01-preview`)
+- 8 MCP tools mapped to REST API operations: list_products, get_product, list_customers, get_customer, list_orders, get_order, create_order, update_order_status
+- Linked to the `st-orders-free` product — same subscription key works for both REST and MCP
+- Tool names match the FastAPI-generated operationIds (e.g., `list_products_api_v1_products_get`)
+
+#### How APIM-native MCP works
+1. MCP client sends JSON-RPC request (e.g., `tools/call` with `name: "list_products_api_v1_products_get"`)
+2. APIM matches the tool name to the corresponding REST API operation in `st-orders-api`
+3. APIM translates the tool arguments into the REST request (query params, path params, body)
+4. APIM applies the inbound policy (`authentication-managed-identity`) to acquire an Entra ID token
+5. APIM calls the Container App backend with the REST request + auth token
+6. APIM wraps the REST response into a JSON-RPC result and streams it back via SSE
+
+#### Bicep schema notes
+- Requires API version `2025-03-01-preview` (preview)
+- Must set **both** `apiType: 'mcp'` and `type: 'mcp'` in properties
+- `mcpTools` array uses `name` (operation name) + `operationId` (full ARM resource ID)
+- Bicep shows `BCP037` warnings for MCP properties — these are expected and can be ignored
 
 ### B. Standalone MCP Server (Secondary) — For local/direct use
 - `src/mcp_server/server.py` using Python `mcp` SDK (FastMCP)
@@ -275,10 +321,36 @@ az rest --method post --uri "https://management.azure.com/.../gateways/managed/l
 }
 ```
 
+### Testing MCP Endpoint
+```bash
+# Initialize session
+curl -X POST "https://<apim>.azure-api.net/st-orders-mcp/mcp" \
+  -H "Ocp-Apim-Subscription-Key: <key>" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
+
+# List available tools
+curl -X POST ... -d '{"jsonrpc":"2.0","method":"tools/list","id":2}'
+
+# Call a tool
+curl -X POST ... -d '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"list_products_api_v1_products_get","arguments":{"category":"Microcontrollers","limit":"2"}}}'
+```
+
 ## Project Structure
 ```
 ├── .github/workflows/    # CI (lint+test) and Deploy (build, infra, app, APIM)
-├── infra/                # Azure Bicep templates (main + 7 modules)
+├── infra/                # Azure Bicep templates (main + 8 modules)
+│   ├── main.bicep        # Orchestrator
+│   └── modules/
+│       ├── managed-identity.bicep
+│       ├── keyvault.bicep
+│       ├── acr.bicep
+│       ├── postgresql.bicep
+│       ├── container-app.bicep
+│       ├── apim.bicep
+│       ├── apim-api.bicep      # REST API import + product + subscription
+│       └── apim-mcp.bicep      # MCP server (apiType: 'mcp')
 ├── src/app/              # FastAPI application
 │   ├── main.py           # Entry point
 │   ├── config.py         # pydantic-settings
@@ -287,7 +359,7 @@ az rest --method post --uri "https://management.azure.com/.../gateways/managed/l
 │   ├── schemas/          # Pydantic schemas per entity
 │   ├── routers/          # health, customers, products, orders
 │   ├── services/         # Business logic per entity
-│   └── seed.py           # ST Micro themed seed data
+│   └── seed.py           # Microelectronics themed seed data
 ├── src/mcp_server/       # Standalone MCP server (FastMCP)
 ├── alembic/              # Database migrations
 ├── tests/                # Pytest test suite

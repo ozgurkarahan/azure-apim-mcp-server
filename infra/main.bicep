@@ -18,7 +18,7 @@ param location string = resourceGroup().location
 param publisherEmail string
 
 @description('Publisher display name for the API Management instance.')
-param publisherName string = 'ST Micro Orders'
+param publisherName string = 'Microelectronics Orders'
 
 @description('Administrator password for the PostgreSQL server.')
 @secure()
@@ -130,6 +130,20 @@ module apimApi 'modules/apim-api.bicep' = {
 }
 
 // --------------------------------------------------------------------------
+// Module: APIM Native MCP Server
+// --------------------------------------------------------------------------
+module apimMcp 'modules/apim-mcp.bicep' = {
+  name: 'apim-mcp'
+  params: {
+    apimName: apim.outputs.name
+    authAudience: 'api://${authClientId}'
+  }
+  dependsOn: [
+    apimApi
+  ]
+}
+
+// --------------------------------------------------------------------------
 // Outputs
 // --------------------------------------------------------------------------
 
@@ -141,3 +155,6 @@ output apimGatewayUrl string = apim.outputs.gatewayUrl
 
 @description('Login server URL for the Azure Container Registry.')
 output acrLoginServer string = acr.outputs.loginServer
+
+@description('MCP endpoint URL for AI assistant integrations.')
+output mcpEndpoint string = apimMcp.outputs.mcpEndpoint

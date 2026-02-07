@@ -26,7 +26,7 @@ resource api 'Microsoft.ApiManagement/service/apis@2023-09-01-preview' = {
   name: 'st-orders-api'
   properties: {
     displayName: 'ST Orders API'
-    description: 'ST Micro Orders API imported from OpenAPI specification.'
+    description: 'Microelectronics Orders API imported from OpenAPI specification.'
     path: 'orders'
     protocols: [
       'https'

@@ -1,4 +1,4 @@
-"""Seed the database with ST Micro themed data."""
+"""Seed the database with Microelectronics themed data."""
 import asyncio
 import random
 import uuid

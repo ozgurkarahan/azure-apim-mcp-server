@@ -3,8 +3,8 @@ from fastapi import FastAPI
 from src.app.routers import health, customers, products, orders
 
 app = FastAPI(
-    title="ST Micro Semiconductor Orders API",
-    description="API for managing ST Microelectronics semiconductor orders, customers, and products.",
+    title="Microelectronics Semiconductor Orders API",
+    description="API for managing Microelectronics semiconductor orders, customers, and products.",
     version="1.0.0",
 )
 

@@ -72,9 +72,10 @@ jobs:
             --parameters \
               environmentName=apim-mcp-dev \
               publisherEmail=${{ secrets.PUBLISHER_EMAIL }} \
-              publisherName='ST Micro Orders Admin' \
+              publisherName='Microelectronics Orders Admin' \
               postgresAdminPassword=${{ secrets.POSTGRES_ADMIN_PASSWORD }} \
-              containerImage=$ACR_LOGIN_SERVER/$IMAGE_NAME:${{ needs.build-and-push.outputs.image_tag }}
+              containerImage=$ACR_LOGIN_SERVER/$IMAGE_NAME:${{ needs.build-and-push.outputs.image_tag }} \
+              authClientId=${{ secrets.AUTH_CLIENT_ID }}
 
   deploy-app:
     runs-on: ubuntu-latest

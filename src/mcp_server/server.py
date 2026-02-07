@@ -1,4 +1,4 @@
-"""Standalone MCP server wrapping the ST Micro Orders REST API."""
+"""Standalone MCP server wrapping the Microelectronics Orders REST API."""
 import os
 
 import httpx
@@ -6,7 +6,7 @@ from mcp.server.fastmcp import FastMCP
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 
-mcp = FastMCP("ST Micro Orders", instructions="Manage ST Microelectronics semiconductor orders, customers, and products.")
+mcp = FastMCP("Microelectronics Orders", instructions="Manage Microelectronics semiconductor orders, customers, and products.")
 
 
 def _api_url(path: str) -> str:
@@ -15,7 +15,7 @@ def _api_url(path: str) -> str:
 
 @mcp.tool()
 async def list_products(category: str | None = None, family: str | None = None, search: str | None = None) -> str:
-    """List ST Micro semiconductor products. Filter by category, product family, or search term."""
+    """List semiconductor products. Filter by category, product family, or search term."""
     params = {}
     if category:
         params["category"] = category
