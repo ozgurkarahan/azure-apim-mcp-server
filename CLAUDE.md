@@ -86,7 +86,7 @@ API_BASE_URL=http://localhost:8000 python -m src.mcp_server.server
 - Service layer pattern: routers -> services -> database
 
 ## Environment Variables
-- `DATABASE_URL` — PostgreSQL connection string (uses `postgresql+asyncpg://` scheme)
+- `DATABASE_URL` — PostgreSQL connection string (uses `postgresql+asyncpg://` scheme). **Password must not contain `@`** — it breaks URL parsing (the `@` is interpreted as the user:password@host separator).
 - `ENVIRONMENT` — dev/staging/production
 - `LOG_LEVEL` — logging level (default: info)
 - `API_BASE_URL` — base URL for MCP server to reach the REST API (default: http://localhost:8000)
@@ -134,14 +134,18 @@ All endpoints are under `/api/v1/`.
 
 ### Deploy Infrastructure
 ```bash
-az group create --name rg-apim-mcp-dev --location eastus
+az group create --name rg-poc-apim --location swedencentral
 az deployment group create \
-  --resource-group rg-apim-mcp-dev \
+  --resource-group rg-poc-apim \
   --template-file infra/main.bicep \
-  --parameters infra/main.bicepparam
+  --parameters environmentName=apim-mcp-dev \
+    publisherEmail=<email> \
+    postgresAdminPassword=<password-without-@> \
+    authClientId=<app-registration-client-id> \
+    containerImage=<acr>.azurecr.io/st-orders-api:latest
 ```
 
-> Note: APIM Developer tier takes ~30-40 min to provision on first deploy.
+> Note: APIM Developer tier takes ~30-40 min to provision on first deploy, ~3 min on updates. Container App now depends on APIM (needs its `principalId` for Easy Auth), so they deploy sequentially.
 
 ### Azure Resources (via Bicep)
 1. **User-assigned Managed Identity** — used by Container App to pull from ACR
@@ -176,10 +180,22 @@ The Container App is secured with Microsoft Entra ID (Azure AD) authentication s
 **Flow**: Client → APIM (subscription key) → APIM acquires Entra ID token via system-assigned managed identity → Container App validates token via Easy Auth → Backend
 
 ### Components
-- **App Registration**: Created via `az ad app create --display-name "st-orders-api"` (not possible in Bicep — it's a Microsoft Graph object). The `appId` output is used as `authClientId`.
+- **App Registration**: Created via `az ad app create --display-name "st-orders-api"` (not possible in Bicep — it's a Microsoft Graph object). The `appId` output is used as `authClientId`. Must also create a Service Principal (`az ad sp create --id <appId>`) and set the Application ID URI (`az ad app update --id <appId> --identifier-uris "api://<appId>"`).
 - **APIM System-Assigned Managed Identity**: APIM uses its MI to acquire tokens for audience `api://<authClientId>` via `<authentication-managed-identity>` policy.
-- **Container App Easy Auth**: `Microsoft.App/containerApps/authConfigs` resource validates Entra ID tokens. Unauthenticated requests get 401.
+- **Container App Easy Auth**: `Microsoft.App/containerApps/authConfigs` resource validates Entra ID tokens. Unauthenticated requests get 401. Authorized callers are specified via `allowedPrincipals.identities` using the APIM MI's `principalId`.
 - **Excluded Paths**: `/health` and `/openapi.json` are excluded from auth for health probes and APIM OpenAPI import.
+
+### App Registration Setup (CLI — not possible in Bicep)
+```bash
+# 1. Create the App Registration
+az ad app create --display-name "st-orders-api" --sign-in-audience AzureADMyOrg
+
+# 2. Set the Application ID URI (used as token audience)
+az ad app update --id <appId> --identifier-uris "api://<appId>"
+
+# 3. Create a Service Principal (required for token issuance)
+az ad sp create --id <appId>
+```
 
 ### Required Parameter
 - `authClientId` — Client ID from the App Registration. Pass to Bicep deployment:
@@ -187,10 +203,33 @@ The Container App is secured with Microsoft Entra ID (Azure AD) authentication s
   az deployment group create ... --parameters authClientId=<app-registration-client-id>
   ```
 
+### Key Design Decisions (from deployment lessons)
+
+**v1 tokens, not v2**: APIM's `authentication-managed-identity` policy acquires tokens via the managed identity endpoint (IMDS), which always issues **v1 tokens** regardless of the App Registration's `requestedAccessTokenVersion` setting. The v1 token issuer is `https://sts.windows.net/{tenantId}/`, so the Easy Auth `openIdIssuer` must use this format — not the v2 `login.microsoftonline.com/.../v2.0` format.
+
+**allowedPrincipals, not allowedApplications**: Easy Auth's `defaultAuthorizationPolicy.allowedApplications: []` means "deny all callers" (not "allow all"). Since the APIM MI's `appId` is not available in Bicep (only `principalId` is), we use `allowedPrincipals.identities` with the APIM `principalId` instead. This checks the `oid` claim in the token.
+
+**Dual audiences**: The `allowedAudiences` list includes both `api://<clientId>` (Application ID URI) and the raw `<clientId>` to accept tokens regardless of which audience format was requested.
+
 ### Verification
 1. Direct call (no token) → **401**: `curl https://<container-app>/api/v1/products`
 2. Health endpoint (excluded) → **200**: `curl https://<container-app>/health`
 3. Via APIM (token acquired automatically) → **200**: `curl -H "Ocp-Apim-Subscription-Key: <key>" https://<apim>/orders/api/v1/products`
+
+### Debugging Auth Issues
+Enable APIM request tracing to inspect token acquisition and forwarding:
+```bash
+# 1. Get debug credentials
+az rest --method post --uri "https://management.azure.com/.../gateways/managed/listDebugCredentials?api-version=2023-09-01-preview" \
+  --body '{"credentialsExpireAfter":"PT1H","apiId":"...","purposes":["tracing"]}'
+
+# 2. Call API with debug header
+curl -H "Apim-Debug-Authorization: <token>" -H "Ocp-Apim-Subscription-Key: <key>" https://<apim>/orders/...
+
+# 3. Fetch trace (use Apim-Trace-Id from response headers)
+az rest --method post --uri "https://management.azure.com/.../gateways/managed/listTrace?api-version=2023-09-01-preview" \
+  --body '{"traceId":"<trace-id>"}'
+```
 
 ## MCP Server
 
