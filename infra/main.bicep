@@ -100,6 +100,7 @@ module containerApp 'modules/container-app.bicep' = {
     acrLoginServer: acr.outputs.loginServer
     databaseUrl: databaseUrl
     authClientId: authClientId
+    apimPrincipalId: apim.outputs.principalId
   }
 }
 

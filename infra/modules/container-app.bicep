@@ -27,6 +27,9 @@ param environment string = 'production'
 @description('Client ID of the Entra ID App Registration for Easy Auth.')
 param authClientId string
 
+@description('Principal ID of the APIM system-assigned managed identity (allowed to call this app).')
+param apimPrincipalId string
+
 // --------------------------------------------------------------------------
 // Log Analytics Workspace
 // --------------------------------------------------------------------------
@@ -146,14 +149,19 @@ resource authConfig 'Microsoft.App/containerApps/authConfigs@2024-03-01' = {
       azureActiveDirectory: {
         registration: {
           clientId: authClientId
-          openIdIssuer: 'https://sts.windows.net/${tenant().tenantId}/v2.0'
+          openIdIssuer: 'https://sts.windows.net/${tenant().tenantId}/'
         }
         validation: {
           defaultAuthorizationPolicy: {
-            allowedApplications: []
+            allowedPrincipals: {
+              identities: [
+                apimPrincipalId
+              ]
+            }
           }
           allowedAudiences: [
             'api://${authClientId}'
+            authClientId
           ]
         }
       }
