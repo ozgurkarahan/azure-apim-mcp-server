@@ -72,8 +72,6 @@ async def create_order(db: AsyncSession, data: OrderCreate) -> Order:
     order.total_amount = total
     db.add(order)
     await db.commit()
-    await db.refresh(order)
-    # Reload with items
     return await get_order(db, order.id)
 
 
