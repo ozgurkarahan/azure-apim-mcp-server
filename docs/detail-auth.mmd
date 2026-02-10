@@ -1,0 +1,15 @@
+sequenceDiagram
+    participant Client
+    participant APIM
+    participant EntraID as Entra ID
+    participant EasyAuth as Easy Auth
+    participant App as Container App
+
+    Client->>APIM: Request + Subscription Key
+    APIM->>EntraID: Acquire token (MI)<br/>audience: api://8b7ac3cc-...
+    EntraID-->>APIM: Bearer Token (v1)
+    APIM->>EasyAuth: Forward request + Bearer Token
+    EasyAuth->>EasyAuth: Validate issuer, audience, principal
+    EasyAuth->>App: Authenticated request
+    App->>App: Process request
+    App-->>Client: Response (via APIM)

@@ -1,0 +1,27 @@
+graph TB
+    subgraph "Clients"
+        DEV["Developer / Client App"]
+        AI["AI Assistant<br/>(Claude, Copilot...)"]
+    end
+
+    subgraph "API Management — apim-mcp-dev-apim (Developer tier)"
+        GW["Gateway<br/>*.azure-api.net"]
+        REST["REST API<br/>st-orders-api<br/>/orders/api/v1/*"]
+        MCP["MCP Server (native)<br/>st-orders-mcp<br/>/st-orders-mcp/mcp"]
+        PROD["Product: st-orders-free<br/>Rate limit: 100 req/min"]
+        SUB["Subscription Key"]
+        MI["System-Assigned<br/>Managed Identity"]
+    end
+
+    BACKEND["Container App<br/>(backend)"]
+    ENTRA["Entra ID<br/>(token endpoint)"]
+
+    DEV -->|"REST + Sub Key"| GW
+    AI -->|"MCP + Sub Key"| GW
+    GW --> REST
+    GW --> MCP
+    REST --> PROD
+    MCP --> PROD
+    PROD --> SUB
+    MI -->|"acquire token<br/>audience: api://8b7ac3cc-..."| ENTRA
+    GW -->|"forward + Bearer token"| BACKEND

@@ -1,0 +1,18 @@
+graph TB
+    subgraph "Container Apps Environment — apim-mcp-dev-app-env"
+        APP["Container App<br/>apim-mcp-dev-app<br/>FastAPI (Python 3.11)<br/>Port 8000 | 0.5 CPU, 1GB RAM<br/>1–3 replicas"]
+        AUTH["Easy Auth<br/>(Entra ID validation)"]
+    end
+
+    LOGS["Log Analytics Workspace<br/>apim-mcp-dev-app-logs<br/>(PerGB2018)"]
+
+    subgraph "Data"
+        PG["PostgreSQL Flexible Server<br/>apim-mcp-dev-pg<br/>v16 — Burstable B1ms, 32GB<br/>DB: storders"]
+    end
+
+    APIM["API Management<br/>(inbound)"]
+
+    APIM -->|"Bearer token"| AUTH
+    AUTH -->|"validated request"| APP
+    APP -->|"asyncpg"| PG
+    APP -->|"logs & metrics"| LOGS

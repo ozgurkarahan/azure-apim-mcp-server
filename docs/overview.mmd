@@ -1,0 +1,30 @@
+graph LR
+    subgraph "Clients"
+        REST_CLIENT["REST Client"]
+        MCP_CLIENT["AI Assistant<br/>(MCP)"]
+    end
+
+    APIM["API Management"]
+
+    subgraph "Backend"
+        APP["Container App<br/>(FastAPI)"]
+        PG[("PostgreSQL")]
+    end
+
+    AUTH["Entra ID<br/>+ Easy Auth"]
+    SECRETS["Identity<br/>& Secrets"]
+
+    subgraph "CI/CD"
+        GH["GitHub Actions"]
+        ACR["Container<br/>Registry"]
+    end
+
+    REST_CLIENT -->|"subscription key"| APIM
+    MCP_CLIENT -->|"subscription key"| APIM
+    APIM -->|"Bearer token"| APP
+    APP --> PG
+    APIM <-.->|"token via MI"| AUTH
+    APP -.->|"MI + Key Vault"| SECRETS
+    GH -->|"docker push"| ACR
+    ACR -->|"image pull"| APP
+    GH -->|"Bicep deploy"| APP

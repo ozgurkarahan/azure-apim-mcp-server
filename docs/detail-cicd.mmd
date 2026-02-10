@@ -1,0 +1,23 @@
+graph LR
+    GH["GitHub<br/>(push to main)"]
+
+    subgraph "GitHub Actions Pipeline"
+        BUILD["Job 1<br/>Build & Push"]
+        INFRA["Job 2<br/>Deploy Infrastructure"]
+        DEPLOY["Job 3<br/>Deploy App"]
+        CONFIG["Job 4<br/>Configure APIM"]
+    end
+
+    ACR["ACR<br/>apimmcpdevacr"]
+    AZURE["Azure Resources<br/>(Bicep)"]
+    APP["Container App<br/>apim-mcp-dev-app"]
+    APIM["APIM<br/>apim-mcp-dev-apim"]
+
+    GH --> BUILD
+    BUILD -->|"docker push<br/>st-orders-api:latest"| ACR
+    BUILD --> INFRA
+    INFRA -->|"az deployment group create<br/>infra/main.bicep"| AZURE
+    INFRA --> DEPLOY
+    DEPLOY -->|"update container image"| APP
+    DEPLOY --> CONFIG
+    CONFIG -->|"import openapi.json"| APIM

@@ -1,0 +1,18 @@
+graph TB
+    subgraph "User-Assigned Managed Identity — apim-mcp-dev-identity"
+        UA_MI["User-Assigned MI"]
+    end
+
+    subgraph "APIM System-Assigned MI"
+        SYS_MI["System MI<br/>(apim-mcp-dev-apim)"]
+    end
+
+    APP["Container App<br/>apim-mcp-dev-app"]
+    ACR["Container Registry<br/>apimmcpdevacr"]
+    KV["Key Vault<br/>apim-mcp-dev-kv<br/>Secret: postgres-admin-password"]
+    ENTRA["Entra ID<br/>App Registration<br/>api://8b7ac3cc-..."]
+
+    APP -.->|"uses identity"| UA_MI
+    UA_MI -->|"AcrPull role"| ACR
+    UA_MI -->|"get / list secrets"| KV
+    SYS_MI -->|"acquire token<br/>audience: api://8b7ac3cc-..."| ENTRA
