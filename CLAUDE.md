@@ -7,21 +7,25 @@ Microelectronics semiconductor orders API deployed to Azure Container Apps, expo
 
 ```mermaid
 graph LR
-    Client[REST Client] -->|subscription key| APIM[Azure API Management]
-    Claude[Claude Desktop] -->|MCP over HTTP| APIM
-    APIM -->|Entra ID token via MI| CA[Container App + Easy Auth]
+    Client[REST Client] -->|subscription key| REST[APIM REST API]
+    Claude[Claude Desktop] -->|MCP over HTTP| MCP[APIM MCP Server]
+    MCP -->|internal sub key| REST
+    REST -->|Entra ID token via MI| CA[Container App + Easy Auth]
     CA -->|SQLAlchemy| PG[(PostgreSQL)]
-    DevPortal[Developer Portal] --> APIM
+    DevPortal[Developer Portal] --> REST
     ACR[Container Registry] -->|image pull| CA
 ```
 
 ### Request Flows
 
-**REST API flow**: Client → APIM (`/orders/api/v1/*`, subscription key) → APIM acquires Entra ID token via system-assigned MI → Container App validates token via Easy Auth → FastAPI → PostgreSQL
+**REST API flow**: Client → APIM REST API (`/orders/api/v1/*`, subscription key) → APIM acquires Entra ID token via system-assigned MI → Container App validates token via Easy Auth → FastAPI → PostgreSQL
 
-**MCP flow**: Claude Desktop → APIM (`/st-orders-mcp/mcp`, subscription key, Streamable HTTP) → APIM translates JSON-RPC tool calls into REST API operations → APIM acquires Entra ID token via MI → Container App → FastAPI → PostgreSQL → response flows back as JSON-RPC result
+**MCP flow**: Claude Desktop → APIM MCP Server (`/st-orders-mcp/mcp`, subscription key, Streamable HTTP) → APIM translates JSON-RPC tool calls into REST API operations → routes to APIM REST API (internal subscription key) → REST API acquires Entra ID token via MI → Container App → FastAPI → PostgreSQL → response flows back as JSON-RPC result
 
-**Key difference**: The MCP flow is handled entirely by APIM's native MCP gateway — no custom MCP code runs on the Container App. APIM receives JSON-RPC requests, maps tool names to REST operations, calls the backend, and wraps the response back into JSON-RPC format.
+**Key points**:
+- The MCP flow is handled entirely by APIM's native MCP gateway — no custom MCP code runs on the Container App
+- MCP tool calls route **through the APIM REST API** (not directly to the Container App), so all REST API policies (managed identity auth, CORS, rate limiting) are applied consistently in one place
+- The MCP API's `serviceUrl` points to the APIM REST API endpoint (`/orders`), and an internal subscription key (stored as a named value) is injected via `set-header` policy
 
 ## Tech Stack
 
@@ -165,7 +169,7 @@ az deployment group create \
 5. **Container Apps Environment + Container App** — runs FastAPI on port 8000, min 1 / max 3 replicas
 6. **API Management** (StandardV2 tier, system-assigned MI) — gateway for REST API + MCP, authenticates to Container App via Entra ID, linked to AI Foundry as AI Gateway
 7. **APIM REST API** (`st-orders-api`) — imported from OpenAPI spec, exposes `/orders/api/v1/*`
-8. **APIM MCP API** (`st-orders-mcp`, `apiType: 'mcp'`) — exposes 8 REST operations as MCP tools at `/st-orders-mcp/mcp`
+8. **APIM MCP API** (`st-orders-mcp`, `apiType: 'mcp'`) — exposes 8 REST operations as MCP tools at `/st-orders-mcp/mcp`, routes tool calls through the APIM REST API (not directly to backend)
 9. **Easy Auth** (Container App authConfig) — Entra ID token validation on Container App
 
 ### Bicep Module Dependency Graph
@@ -201,9 +205,11 @@ postgres ──────────┘
 ## APIM Configuration
 - API imported from Container App's `/openapi.json`
 - **Product**: "ST Orders API - Free" (100 calls/min, self-service subscription)
-- **Policies**: CORS (allow Developer Portal), rate limiting, managed identity auth
+- **REST API policies**: CORS (allow Developer Portal), rate limiting, managed identity auth to Container App
+- **MCP API policy**: `set-header` injects internal subscription key — no direct backend auth (delegated to REST API)
+- **Named value**: `st-orders-internal-key` — subscription key used by MCP API to call the REST API internally
 - REST API available at: `https://<apim>.azure-api.net/orders/api/v1/*`
-- MCP API available at: `https://<apim>.azure-api.net/st-orders-mcp/mcp`
+- MCP API available at: `https://<apim>.azure-api.net/st-orders-mcp/mcp` (serviceUrl → `/orders`)
 
 ## AI Foundry Integration (AI Gateway)
 
@@ -241,7 +247,9 @@ az apim deletedservice purge --service-name apim-mcp-dev-apim --location swedenc
 
 The Container App is secured with Microsoft Entra ID (Azure AD) authentication so it cannot be called directly, bypassing APIM.
 
-**Flow**: Client → APIM (subscription key) → APIM acquires Entra ID token via system-assigned managed identity → Container App validates token via Easy Auth → Backend
+**REST API flow**: Client → APIM REST API (subscription key) → APIM acquires Entra ID token via system-assigned managed identity → Container App validates token via Easy Auth → Backend
+
+**MCP flow**: Client → APIM MCP Server (subscription key) → APIM REST API (internal subscription key via `set-header`) → APIM acquires Entra ID token via MI → Container App (Easy Auth) → Backend
 
 ### Components
 - **App Registration**: Created via `az ad app create --display-name "st-orders-api"` (not possible in Bicep — it's a Microsoft Graph object). The `appId` output is used as `authClientId`. Must also create a Service Principal (`az ad sp create --id <appId>`) and set the Application ID URI (`az ad app update --id <appId> --identifier-uris "api://<appId>"`).
@@ -302,23 +310,27 @@ az rest --method post --uri "https://management.azure.com/.../gateways/managed/l
 - Endpoint: `https://<apim>.azure-api.net/st-orders-mcp/mcp`
 - Transport: Streamable HTTP (JSON-RPC 2.0 over SSE), auth via subscription key
 - Deployed via Bicep: `infra/modules/apim-mcp.bicep` (uses `apiType: 'mcp'` + `type: 'mcp'` with API version `2025-03-01-preview`)
+- **Routes through APIM REST API**: `serviceUrl` points to the APIM REST API endpoint (`/orders`), not directly to the Container App. Internal subscription key injected via `set-header` policy and stored as named value `st-orders-internal-key`.
 - 8 MCP tools mapped to REST API operations: list_products, get_product, list_customers, get_customer, list_orders, get_order, create_order, update_order_status
 - Linked to the `st-orders-free` product — same subscription key works for both REST and MCP
 - Tool names match the FastAPI-generated operationIds (e.g., `list_products_api_v1_products_get`)
 
 #### How APIM-native MCP works
 1. MCP client sends JSON-RPC request (e.g., `tools/call` with `name: "list_products_api_v1_products_get"`)
-2. APIM matches the tool name to the corresponding REST API operation in `st-orders-api`
-3. APIM translates the tool arguments into the REST request (query params, path params, body)
-4. APIM applies the inbound policy (`authentication-managed-identity`) to acquire an Entra ID token
-5. APIM calls the Container App backend with the REST request + auth token
-6. APIM wraps the REST response into a JSON-RPC result and streams it back via SSE
+2. APIM MCP gateway matches the tool name to the corresponding REST API operation in `st-orders-api`
+3. APIM translates the tool arguments into a REST request (query params, path params, body)
+4. APIM MCP inbound policy injects the internal subscription key via `set-header`
+5. APIM sends the REST request to the APIM REST API endpoint (`/orders/api/v1/...`)
+6. APIM REST API inbound policy acquires an Entra ID token via `authentication-managed-identity`
+7. APIM REST API calls the Container App backend with the auth token
+8. Response flows back: Container App → REST API → MCP gateway → JSON-RPC result streamed via SSE
 
 #### Bicep schema notes
-- Requires API version `2025-03-01-preview` (preview)
+- MCP API and policy use API version `2025-03-01-preview` (preview); all other child resources use `2024-05-01` (required for StandardV2 compatibility)
 - Must set **both** `apiType: 'mcp'` and `type: 'mcp'` in properties
 - `mcpTools` array uses `name` (operation name) + `operationId` (full ARM resource ID)
 - Bicep shows `BCP037` warnings for MCP properties — these are expected and can be ignored
+- Subscription key for internal routing is read via `listSecrets()` on the existing subscription and stored as a secret named value
 
 ### B. Standalone MCP Server (Secondary) — For local/direct use
 - `src/mcp_server/server.py` using Python `mcp` SDK (FastMCP)
@@ -385,7 +397,7 @@ curl -X POST ... -d '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"na
 │       ├── container-app.bicep
 │       ├── apim.bicep
 │       ├── apim-api.bicep      # REST API import + product + subscription
-│       ├── apim-mcp.bicep       # MCP server (apiType: 'mcp')
+│       ├── apim-mcp.bicep       # MCP server (routes through REST API)
 │       └── apim-foundry-roles.bicep  # AI Foundry role assignments (conditional)
 ├── src/app/              # FastAPI application
 │   ├── main.py           # Entry point

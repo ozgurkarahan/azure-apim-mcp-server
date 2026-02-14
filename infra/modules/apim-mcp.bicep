@@ -3,9 +3,13 @@
 // Exposes the ST Orders REST API as an MCP server using APIM's native MCP feature.
 // APIM converts existing REST API operations into MCP tools automatically.
 //
-// Requires API version 2025-03-01-preview. Bicep will show schema warnings
-// for MCP-specific properties (apiType, type, mcpTools) because the types
-// aren't in the published Bicep schema yet — deploys successfully regardless.
+// Routing: MCP tool calls route through the APIM REST API endpoint (/orders)
+// via an internal subscription key (stored as named value), NOT directly to
+// the Container App. The REST API handles managed identity auth to the backend.
+//
+// API versions: 2025-03-01-preview for MCP resources (apiType/mcpTools),
+// 2024-05-01 for all other APIM child resources (required for StandardV2).
+// Bicep shows BCP037 warnings for MCP properties — expected and safe to ignore.
 // ============================================================================
 
 @description('Name of the existing API Management instance.')
