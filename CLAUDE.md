@@ -1,7 +1,7 @@
 # CLAUDE.md — azure-apim-mcp-server
 
 ## Project Overview
-Microelectronics semiconductor orders API deployed to Azure Container Apps, exposed through Azure API Management as both a REST API and MCP (Model Context Protocol) server, with Developer Portal.
+Microelectronics semiconductor orders API deployed to Azure Container Apps, exposed through Azure API Management (StandardV2) as both a REST API and MCP (Model Context Protocol) server, linked to AI Foundry as an AI Gateway.
 
 ## Architecture
 
@@ -35,7 +35,7 @@ graph LR
 | MCP Server (local) | Python `mcp` SDK (FastMCP) — for stdio/local dev |
 | Infrastructure | Azure Bicep |
 | Hosting | Azure Container Apps |
-| API Gateway | Azure API Management (Developer tier) |
+| API Gateway | Azure API Management (StandardV2 tier) |
 | Auth | Microsoft Entra ID (Easy Auth + Managed Identity) |
 | CI/CD | GitHub Actions |
 | Container Registry | Azure Container Registry |
@@ -155,7 +155,7 @@ az deployment group create \
     containerImage=<acr>.azurecr.io/st-orders-api:latest
 ```
 
-> Note: APIM Developer tier takes ~30-40 min to provision on first deploy, ~3 min on updates. Container App now depends on APIM (needs its `principalId` for Easy Auth), so they deploy sequentially.
+> Note: APIM StandardV2 takes ~5 min to provision (much faster than the old Developer tier). Container App depends on APIM (needs its `principalId` for Easy Auth), so they deploy sequentially.
 
 ### Azure Resources (via Bicep)
 1. **User-assigned Managed Identity** — used by Container App to pull from ACR
@@ -163,7 +163,7 @@ az deployment group create \
 3. **Azure Container Registry** (Basic SKU) — hosts Docker images
 4. **PostgreSQL Flexible Server** (Burstable B1ms, v16, 32GB) + database `storders`
 5. **Container Apps Environment + Container App** — runs FastAPI on port 8000, min 1 / max 3 replicas
-6. **API Management** (Developer tier, system-assigned MI) — gateway for REST API + MCP, authenticates to Container App via Entra ID
+6. **API Management** (StandardV2 tier, system-assigned MI) — gateway for REST API + MCP, authenticates to Container App via Entra ID, linked to AI Foundry as AI Gateway
 7. **APIM REST API** (`st-orders-api`) — imported from OpenAPI spec, exposes `/orders/api/v1/*`
 8. **APIM MCP API** (`st-orders-mcp`, `apiType: 'mcp'`) — exposes 8 REST operations as MCP tools at `/st-orders-mcp/mcp`
 9. **Easy Auth** (Container App authConfig) — Entra ID token validation on Container App
@@ -179,7 +179,9 @@ apim ──────┬── containerApp (depends on: identity, acr, postgr
             ├── apimApi (depends on: apim, containerApp)
             │       │
             │       ▼
-            └── apimMcp (depends on: apim, apimApi)
+            ├── apimMcp (depends on: apim, apimApi)
+            │
+            └── apimFoundryRoles (depends on: apim; conditional on aiFoundryPrincipalId)
 
 postgres ──────────┘
 ```
@@ -194,6 +196,7 @@ postgres ──────────┘
 - `POSTGRES_ADMIN_PASSWORD` — PostgreSQL admin password
 - `PUBLISHER_EMAIL` — APIM publisher email
 - `AUTH_CLIENT_ID` — Entra ID App Registration client ID for Easy Auth
+- `AI_FOUNDRY_PRINCIPAL_ID` — Principal ID of the AI Foundry hub managed identity (for APIM role assignment)
 
 ## APIM Configuration
 - API imported from Container App's `/openapi.json`
@@ -201,6 +204,38 @@ postgres ──────────┘
 - **Policies**: CORS (allow Developer Portal), rate limiting, managed identity auth
 - REST API available at: `https://<apim>.azure-api.net/orders/api/v1/*`
 - MCP API available at: `https://<apim>.azure-api.net/st-orders-mcp/mcp`
+
+## AI Foundry Integration (AI Gateway)
+
+The APIM instance (StandardV2) is linked to AI Foundry as an **AI Gateway**, enabling token limits, quotas, agent governance, and a unified control plane for API/model calls.
+
+### Requirements
+- APIM must be **StandardV2** (v2 architecture) — classic tiers (Developer, Basic, Standard) are not compatible
+- The AI Foundry hub's managed identity needs **API Management Service Contributor** role on the APIM instance (deployed via `apim-foundry-roles.bicep`)
+
+### Resources
+| Item | Value |
+|------|-------|
+| AI Foundry hub | `aoai-c544zegk5tvc2` in `rg-ai-search-agent` |
+| Foundry project | `proj-c544zegk5tvc2` |
+| Foundry MI principal ID | `16f8dbdc-61c3-42ff-a3c7-8692833c692e` |
+
+### Linking APIM to AI Foundry (Portal — one-time manual step)
+AI Gateway linking cannot be done via CLI or Bicep. After deployment:
+1. Go to [Microsoft Foundry portal](https://ai.azure.com)
+2. Select **Operate** > **Admin console** > **AI Gateway** tab
+3. **Add AI Gateway** > select Foundry resource `aoai-c544zegk5tvc2`
+4. Choose **Use existing** APIM > select `apim-mcp-dev-apim`
+5. Name the gateway (e.g., `st-orders-gateway`) > **Add**
+6. Enable project: select the gateway > **Add project to gateway** > select `proj-c544zegk5tvc2`
+
+### SKU Migration Note
+Classic Developer tier cannot be upgraded in-place to StandardV2. To migrate:
+```bash
+az apim delete --name apim-mcp-dev-apim --resource-group rg-poc-apim --yes
+az apim deletedservice purge --service-name apim-mcp-dev-apim --location swedencentral
+# Then redeploy via Bicep — StandardV2 provisions in ~5 min
+```
 
 ## Authentication (Entra ID + Easy Auth)
 
@@ -340,7 +375,7 @@ curl -X POST ... -d '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"na
 ## Project Structure
 ```
 ├── .github/workflows/    # CI (lint+test) and Deploy (build, infra, app, APIM)
-├── infra/                # Azure Bicep templates (main + 8 modules)
+├── infra/                # Azure Bicep templates (main + 9 modules)
 │   ├── main.bicep        # Orchestrator
 │   └── modules/
 │       ├── managed-identity.bicep
@@ -350,7 +385,8 @@ curl -X POST ... -d '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"na
 │       ├── container-app.bicep
 │       ├── apim.bicep
 │       ├── apim-api.bicep      # REST API import + product + subscription
-│       └── apim-mcp.bicep      # MCP server (apiType: 'mcp')
+│       ├── apim-mcp.bicep       # MCP server (apiType: 'mcp')
+│       └── apim-foundry-roles.bicep  # AI Foundry role assignments (conditional)
 ├── src/app/              # FastAPI application
 │   ├── main.py           # Entry point
 │   ├── config.py         # pydantic-settings

@@ -1,5 +1,5 @@
 // ============================================================================
-// Module: Azure API Management (Developer Tier)
+// Module: Azure API Management (StandardV2 — v2 architecture)
 // ============================================================================
 
 @description('Name of the API Management instance.')
@@ -18,7 +18,7 @@ resource apim 'Microsoft.ApiManagement/service@2023-09-01-preview' = {
   name: name
   location: location
   sku: {
-    name: 'Developer'
+    name: 'StandardV2'
     capacity: 1
   }
   identity: {

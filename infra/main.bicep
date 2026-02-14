@@ -30,6 +30,9 @@ param containerImage string = 'mcr.microsoft.com/azuredocs/containerapps-hellowo
 @description('Client ID of the Entra ID App Registration for Easy Auth (from az ad app create).')
 param authClientId string
 
+@description('Principal ID of the AI Foundry hub managed identity (for APIM role assignment). Leave empty to skip.')
+param aiFoundryPrincipalId string = ''
+
 // --------------------------------------------------------------------------
 // Variables
 // --------------------------------------------------------------------------
@@ -144,6 +147,17 @@ module apimMcp 'modules/apim-mcp.bicep' = {
 }
 
 // --------------------------------------------------------------------------
+// Module: APIM AI Foundry Role Assignments (conditional)
+// --------------------------------------------------------------------------
+module apimFoundryRoles 'modules/apim-foundry-roles.bicep' = if (!empty(aiFoundryPrincipalId)) {
+  name: 'apim-foundry-roles'
+  params: {
+    apimName: apim.outputs.name
+    aiFoundryPrincipalId: aiFoundryPrincipalId
+  }
+}
+
+// --------------------------------------------------------------------------
 // Outputs
 // --------------------------------------------------------------------------
 
@@ -155,6 +169,9 @@ output apimGatewayUrl string = apim.outputs.gatewayUrl
 
 @description('Login server URL for the Azure Container Registry.')
 output acrLoginServer string = acr.outputs.loginServer
+
+@description('Resource ID of the API Management instance.')
+output apimResourceId string = apim.outputs.id
 
 @description('MCP endpoint URL for AI assistant integrations.')
 output mcpEndpoint string = apimMcp.outputs.mcpEndpoint

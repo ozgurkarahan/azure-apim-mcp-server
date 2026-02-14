@@ -75,7 +75,8 @@ jobs:
               publisherName='Microelectronics Orders Admin' \
               postgresAdminPassword=${{ secrets.POSTGRES_ADMIN_PASSWORD }} \
               containerImage=$ACR_LOGIN_SERVER/$IMAGE_NAME:${{ needs.build-and-push.outputs.image_tag }} \
-              authClientId=${{ secrets.AUTH_CLIENT_ID }}
+              authClientId=${{ secrets.AUTH_CLIENT_ID }} \
+              aiFoundryPrincipalId=${{ secrets.AI_FOUNDRY_PRINCIPAL_ID }}
 
   deploy-app:
     runs-on: ubuntu-latest
@@ -153,5 +154,6 @@ jobs:
             --path orders \
             --specification-format OpenApiJson \
             --specification-url "https://$APP_URL/openapi.json" \
+            --service-url "https://$APP_URL" \
             --display-name "ST Orders API" \
             --protocols https
