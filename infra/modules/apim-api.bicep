@@ -14,14 +14,14 @@ param authAudience string
 // --------------------------------------------------------------------------
 // Reference existing APIM instance
 // --------------------------------------------------------------------------
-resource apim 'Microsoft.ApiManagement/service@2023-09-01-preview' existing = {
+resource apim 'Microsoft.ApiManagement/service@2024-05-01' existing = {
   name: apimName
 }
 
 // --------------------------------------------------------------------------
 // Import API from OpenAPI specification
 // --------------------------------------------------------------------------
-resource api 'Microsoft.ApiManagement/service/apis@2023-09-01-preview' = {
+resource api 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
   parent: apim
   name: 'st-orders-api'
   properties: {
@@ -43,7 +43,7 @@ resource api 'Microsoft.ApiManagement/service/apis@2023-09-01-preview' = {
 // --------------------------------------------------------------------------
 var corsPolicyXml = '<policies><inbound><base /><cors allow-credentials="true"><allowed-origins><origin>https://${apimName}.developer.azure-api.net</origin></allowed-origins><allowed-methods preflight-result-max-age="300"><method>GET</method><method>POST</method><method>PUT</method><method>DELETE</method><method>PATCH</method><method>OPTIONS</method></allowed-methods><allowed-headers><header>*</header></allowed-headers></cors><authentication-managed-identity resource="${authAudience}" /></inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>'
 
-resource apiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-09-01-preview' = {
+resource apiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = {
   parent: api
   name: 'policy'
   properties: {
@@ -55,7 +55,7 @@ resource apiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-09-01-pre
 // --------------------------------------------------------------------------
 // Product: ST Orders API - Free (with rate limit)
 // --------------------------------------------------------------------------
-resource product 'Microsoft.ApiManagement/service/products@2023-09-01-preview' = {
+resource product 'Microsoft.ApiManagement/service/products@2024-05-01' = {
   parent: apim
   name: 'st-orders-free'
   properties: {
@@ -68,13 +68,13 @@ resource product 'Microsoft.ApiManagement/service/products@2023-09-01-preview' =
 }
 
 // Link the API to the product
-resource productApi 'Microsoft.ApiManagement/service/products/apis@2023-09-01-preview' = {
+resource productApi 'Microsoft.ApiManagement/service/products/apis@2024-05-01' = {
   parent: product
   name: api.name
 }
 
 // Rate limit policy on the product (100 calls per minute)
-resource productPolicy 'Microsoft.ApiManagement/service/products/policies@2023-09-01-preview' = {
+resource productPolicy 'Microsoft.ApiManagement/service/products/policies@2024-05-01' = {
   parent: product
   name: 'policy'
   properties: {
@@ -101,7 +101,7 @@ resource productPolicy 'Microsoft.ApiManagement/service/products/policies@2023-0
 // --------------------------------------------------------------------------
 // Subscription for the Free product
 // --------------------------------------------------------------------------
-resource subscription 'Microsoft.ApiManagement/service/subscriptions@2023-09-01-preview' = {
+resource subscription 'Microsoft.ApiManagement/service/subscriptions@2024-05-01' = {
   parent: apim
   name: 'st-orders-free-subscription'
   properties: {

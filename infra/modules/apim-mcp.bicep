@@ -31,16 +31,16 @@ var mcpOperations = [
 // --------------------------------------------------------------------------
 // Reference existing APIM instance, REST API, and operations
 // --------------------------------------------------------------------------
-resource apim 'Microsoft.ApiManagement/service@2023-09-01-preview' existing = {
+resource apim 'Microsoft.ApiManagement/service@2024-05-01' existing = {
   name: apimName
 }
 
-resource restApi 'Microsoft.ApiManagement/service/apis@2023-09-01-preview' existing = {
+resource restApi 'Microsoft.ApiManagement/service/apis@2024-05-01' existing = {
   parent: apim
   name: 'st-orders-api'
 }
 
-resource operations 'Microsoft.ApiManagement/service/apis/operations@2023-09-01-preview' existing = [for op in mcpOperations: {
+resource operations 'Microsoft.ApiManagement/service/apis/operations@2024-05-01' existing = [for op in mcpOperations: {
   parent: restApi
   name: op
 }]
@@ -88,12 +88,12 @@ resource mcpApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2025-03-01-
 // Link MCP API to the existing "ST Orders Free" product
 // so the same subscription key works for both REST and MCP.
 // --------------------------------------------------------------------------
-resource product 'Microsoft.ApiManagement/service/products@2023-09-01-preview' existing = {
+resource product 'Microsoft.ApiManagement/service/products@2024-05-01' existing = {
   parent: apim
   name: 'st-orders-free'
 }
 
-resource mcpProductApi 'Microsoft.ApiManagement/service/products/apis@2023-09-01-preview' = {
+resource mcpProductApi 'Microsoft.ApiManagement/service/products/apis@2024-05-01' = {
   parent: product
   name: mcpApi.name
 }

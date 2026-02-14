@@ -11,7 +11,7 @@ param apimName string
 param aiFoundryPrincipalId string
 
 // Reference the existing APIM instance
-resource apim 'Microsoft.ApiManagement/service@2023-09-01-preview' existing = {
+resource apim 'Microsoft.ApiManagement/service@2024-05-01' existing = {
   name: apimName
 }
 

@@ -14,7 +14,7 @@ param publisherEmail string
 @description('Publisher display name for the APIM instance.')
 param publisherName string
 
-resource apim 'Microsoft.ApiManagement/service@2023-09-01-preview' = {
+resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
   name: name
   location: location
   sku: {
