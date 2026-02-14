@@ -139,7 +139,7 @@ module apimMcp 'modules/apim-mcp.bicep' = {
   name: 'apim-mcp'
   params: {
     apimName: apim.outputs.name
-    authAudience: 'api://${authClientId}'
+    apimGatewayUrl: apim.outputs.gatewayUrl
   }
   dependsOn: [
     apimApi

@@ -11,8 +11,8 @@
 @description('Name of the existing API Management instance.')
 param apimName string
 
-@description('Entra ID audience URI for managed identity authentication (e.g., api://<clientId>).')
-param authAudience string
+@description('Gateway URL of the API Management instance (e.g., https://apim-mcp-dev-apim.azure-api.net).')
+param apimGatewayUrl string
 
 // --------------------------------------------------------------------------
 // Operations to expose as MCP tools
@@ -46,7 +46,30 @@ resource operations 'Microsoft.ApiManagement/service/apis/operations@2024-05-01'
 }]
 
 // --------------------------------------------------------------------------
+// Internal subscription key: stored as a named value so the MCP API
+// can route calls through the APIM REST API endpoint (which handles
+// managed identity auth to the Container App).
+// --------------------------------------------------------------------------
+resource existingSubscription 'Microsoft.ApiManagement/service/subscriptions@2024-05-01' existing = {
+  parent: apim
+  name: 'st-orders-free-subscription'
+}
+
+resource internalKeyNamedValue 'Microsoft.ApiManagement/service/namedValues@2024-05-01' = {
+  parent: apim
+  name: 'st-orders-internal-key'
+  properties: {
+    displayName: 'st-orders-internal-key'
+    value: existingSubscription.listSecrets().primaryKey
+    secret: true
+  }
+}
+
+// --------------------------------------------------------------------------
 // MCP API Resource
+// Routes tool calls through the APIM REST API endpoint (/orders) instead
+// of calling the Container App directly. The REST API handles backend
+// authentication via managed identity.
 // --------------------------------------------------------------------------
 resource mcpApi 'Microsoft.ApiManagement/service/apis@2025-03-01-preview' = {
   parent: apim
@@ -61,6 +84,7 @@ resource mcpApi 'Microsoft.ApiManagement/service/apis@2025-03-01-preview' = {
     subscriptionRequired: true
     apiType: 'mcp'
     type: 'mcp'
+    serviceUrl: '${apimGatewayUrl}/orders'
     mcpTools: [for (op, i) in mcpOperations: {
       name: operations[i].name
       operationId: operations[i].id
@@ -69,11 +93,10 @@ resource mcpApi 'Microsoft.ApiManagement/service/apis@2025-03-01-preview' = {
 }
 
 // --------------------------------------------------------------------------
-// Inbound Policy: Managed Identity Authentication
-// Same auth as the REST API — APIM acquires Entra ID token via its
-// system-assigned MI to authenticate to the Container App backend.
+// Inbound Policy: Pass subscription key for internal REST API call
+// MCP → APIM REST API (subscription key) → Container App (MI token)
 // --------------------------------------------------------------------------
-var mcpPolicyXml = '<policies><inbound><base /><authentication-managed-identity resource="${authAudience}" /></inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>'
+var mcpPolicyXml = '<policies><inbound><base /><set-header name="Ocp-Apim-Subscription-Key" exists-action="override"><value>{{st-orders-internal-key}}</value></set-header></inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>'
 
 resource mcpApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2025-03-01-preview' = {
   parent: mcpApi
@@ -82,6 +105,7 @@ resource mcpApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2025-03-01-
     format: 'rawxml'
     value: mcpPolicyXml
   }
+  dependsOn: [internalKeyNamedValue]
 }
 
 // --------------------------------------------------------------------------
