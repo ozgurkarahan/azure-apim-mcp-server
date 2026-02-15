@@ -10,7 +10,7 @@ graph LR
     Client[REST Client] -->|subscription key| REST[APIM REST API]
     Claude[Claude Desktop] -->|MCP over HTTP| MCP[APIM MCP Server]
     MCP -->|internal sub key| REST
-    REST -->|Entra ID token via MI| CA[Container App + Easy Auth]
+    REST --> CA[Container App]
     CA -->|SQLAlchemy| PG[(PostgreSQL)]
     DevPortal[Developer Portal] --> REST
     ACR[Container Registry] -->|image pull| CA
@@ -18,14 +18,15 @@ graph LR
 
 ### Request Flows
 
-**REST API flow**: Client → APIM REST API (`/orders/api/v1/*`, subscription key) → APIM acquires Entra ID token via system-assigned MI → Container App validates token via Easy Auth → FastAPI → PostgreSQL
+**REST API flow**: Client → APIM REST API (`/orders/api/v1/*`, subscription key + CORS) → Container App (FastAPI) → PostgreSQL
 
-**MCP flow**: Claude Desktop → APIM MCP Server (`/st-orders-mcp/mcp`, subscription key, Streamable HTTP) → APIM translates JSON-RPC tool calls into REST API operations → routes to APIM REST API (internal subscription key) → REST API acquires Entra ID token via MI → Container App → FastAPI → PostgreSQL → response flows back as JSON-RPC result
+**MCP flow**: Claude Desktop → APIM MCP Server (`/st-orders-mcp/mcp`, subscription key, Streamable HTTP) → APIM translates JSON-RPC tool calls into REST API operations → routes to APIM REST API (internal subscription key + CORS) → Container App (FastAPI) → PostgreSQL → response flows back as JSON-RPC result
 
 **Key points**:
 - The MCP flow is handled entirely by APIM's native MCP gateway — no custom MCP code runs on the Container App
-- MCP tool calls route **through the APIM REST API** (not directly to the Container App), so all REST API policies (managed identity auth, CORS, rate limiting) are applied consistently in one place
+- MCP tool calls route **through the APIM REST API** (not directly to the Container App), so all REST API policies (CORS, rate limiting) are applied consistently in one place
 - The MCP API's `serviceUrl` points to the APIM REST API endpoint (`/orders`), and an internal subscription key (stored as a named value) is injected via `set-header` policy
+- Easy Auth on Container App is **disabled** — access control is handled at the APIM layer via subscription keys
 
 ## Tech Stack
 
@@ -40,7 +41,7 @@ graph LR
 | Infrastructure | Azure Bicep |
 | Hosting | Azure Container Apps |
 | API Gateway | Azure API Management (StandardV2 tier) |
-| Auth | Microsoft Entra ID (Easy Auth + Managed Identity) |
+| Auth | APIM subscription keys (Easy Auth disabled) |
 | CI/CD | GitHub Actions |
 | Container Registry | Azure Container Registry |
 | Secrets | Azure Key Vault |
@@ -167,10 +168,10 @@ az deployment group create \
 3. **Azure Container Registry** (Basic SKU) — hosts Docker images
 4. **PostgreSQL Flexible Server** (Burstable B1ms, v16, 32GB) + database `storders`
 5. **Container Apps Environment + Container App** — runs FastAPI on port 8000, min 1 / max 3 replicas
-6. **API Management** (StandardV2 tier, system-assigned MI) — gateway for REST API + MCP, authenticates to Container App via Entra ID, linked to AI Foundry as AI Gateway
+6. **API Management** (StandardV2 tier, system-assigned MI) — gateway for REST API + MCP, linked to AI Foundry as AI Gateway
 7. **APIM REST API** (`st-orders-api`) — imported from OpenAPI spec, exposes `/orders/api/v1/*`
 8. **APIM MCP API** (`st-orders-mcp`, `apiType: 'mcp'`) — exposes 8 REST operations as MCP tools at `/st-orders-mcp/mcp`, routes tool calls through the APIM REST API (not directly to backend)
-9. **Easy Auth** (Container App authConfig) — Entra ID token validation on Container App
+9. **Easy Auth** (Container App authConfig) — **disabled**; config retained for optional re-enablement with v2 token issuer
 
 ### Bicep Module Dependency Graph
 ```
@@ -205,8 +206,8 @@ postgres ──────────┘
 ## APIM Configuration
 - API imported from Container App's `/openapi.json`
 - **Product**: "ST Orders API - Free" (100 calls/min, self-service subscription)
-- **REST API policies**: CORS (allow Developer Portal), rate limiting, managed identity auth to Container App
-- **MCP API policy**: `set-header` injects internal subscription key — no direct backend auth (delegated to REST API)
+- **REST API policies**: CORS (allow Developer Portal), rate limiting
+- **MCP API policy**: `set-header` injects internal subscription key to route calls through the REST API
 - **Named value**: `st-orders-internal-key` — subscription key used by MCP API to call the REST API internally
 - REST API available at: `https://<apim>.azure-api.net/orders/api/v1/*`
 - MCP API available at: `https://<apim>.azure-api.net/st-orders-mcp/mcp` (serviceUrl → `/orders`)
@@ -243,65 +244,41 @@ az apim deletedservice purge --service-name apim-mcp-dev-apim --location swedenc
 # Then redeploy via Bicep — StandardV2 provisions in ~5 min
 ```
 
-## Authentication (Entra ID + Easy Auth)
+## Authentication
 
-The Container App is secured with Microsoft Entra ID (Azure AD) authentication so it cannot be called directly, bypassing APIM.
+Access control is handled at the APIM layer via **subscription keys**. Easy Auth on the Container App is **disabled**.
 
-**REST API flow**: Client → APIM REST API (subscription key) → APIM acquires Entra ID token via system-assigned managed identity → Container App validates token via Easy Auth → Backend
+**REST API flow**: Client → APIM REST API (subscription key required) → Container App (no auth) → Backend
 
-**MCP flow**: Client → APIM MCP Server (subscription key) → APIM REST API (internal subscription key via `set-header`) → APIM acquires Entra ID token via MI → Container App (Easy Auth) → Backend
+**MCP flow**: Client → APIM MCP Server (subscription key) → APIM REST API (internal subscription key via `set-header`) → Container App → Backend
 
-### Components
-- **App Registration**: Created via `az ad app create --display-name "st-orders-api"` (not possible in Bicep — it's a Microsoft Graph object). The `appId` output is used as `authClientId`. Must also create a Service Principal (`az ad sp create --id <appId>`) and set the Application ID URI (`az ad app update --id <appId> --identifier-uris "api://<appId>"`).
-- **APIM System-Assigned Managed Identity**: APIM uses its MI to acquire tokens for audience `api://<authClientId>` via `<authentication-managed-identity>` policy.
-- **Container App Easy Auth**: `Microsoft.App/containerApps/authConfigs` resource validates Entra ID tokens. Unauthenticated requests get 401. Authorized callers are specified via `allowedPrincipals.identities` using the APIM MI's `principalId`.
-- **Excluded Paths**: `/health` and `/openapi.json` are excluded from auth for health probes and APIM OpenAPI import.
+### Easy Auth (Disabled)
 
-### App Registration Setup (CLI — not possible in Bicep)
-```bash
-# 1. Create the App Registration
-az ad app create --display-name "st-orders-api" --sign-in-audience AzureADMyOrg
+Easy Auth (`Microsoft.App/containerApps/authConfigs`) is deployed but disabled (`platform.enabled: false`). The auth config is retained in Bicep so it can be re-enabled if needed.
 
-# 2. Set the Application ID URI (used as token audience)
-az ad app update --id <appId> --identifier-uris "api://<appId>"
+If re-enabling Easy Auth, note these key findings from the StandardV2 migration:
 
-# 3. Create a Service Principal (required for token issuance)
-az ad sp create --id <appId>
-```
+**StandardV2 APIM issues v2 tokens**: Unlike the classic Developer tier (which issued v1 tokens via IMDS), the StandardV2 APIM managed identity issues **v2 tokens**. The v2 token has `iss: "https://login.microsoftonline.com/{tenantId}/v2.0"` and `ver: "2.0"`. The Easy Auth `openIdIssuer` in Bicep is already set to the v2 format to match.
 
-### Required Parameter
-- `authClientId` — Client ID from the App Registration. Pass to Bicep deployment:
-  ```bash
-  az deployment group create ... --parameters authClientId=<app-registration-client-id>
-  ```
-
-### Key Design Decisions (from deployment lessons)
-
-**v1 tokens, not v2**: APIM's `authentication-managed-identity` policy acquires tokens via the managed identity endpoint (IMDS), which always issues **v1 tokens** regardless of the App Registration's `requestedAccessTokenVersion` setting. The v1 token issuer is `https://sts.windows.net/{tenantId}/`, so the Easy Auth `openIdIssuer` must use this format — not the v2 `login.microsoftonline.com/.../v2.0` format.
-
-**allowedPrincipals, not allowedApplications**: Easy Auth's `defaultAuthorizationPolicy.allowedApplications: []` means "deny all callers" (not "allow all"). Since the APIM MI's `appId` is not available in Bicep (only `principalId` is), we use `allowedPrincipals.identities` with the APIM `principalId` instead. This checks the `oid` claim in the token.
+**allowedPrincipals, not allowedApplications**: Easy Auth's `defaultAuthorizationPolicy.allowedApplications: []` means "deny all callers" (not "allow all"). Use `allowedPrincipals.identities` with the APIM MI's `principalId` (checks the `oid` claim).
 
 **Dual audiences**: The `allowedAudiences` list includes both `api://<clientId>` (Application ID URI) and the raw `<clientId>` to accept tokens regardless of which audience format was requested.
 
-### Verification
-1. Direct call (no token) → **401**: `curl https://<container-app>/api/v1/products`
-2. Health endpoint (excluded) → **200**: `curl https://<container-app>/health`
-3. Via APIM (token acquired automatically) → **200**: `curl -H "Ocp-Apim-Subscription-Key: <key>" https://<apim>/orders/api/v1/products`
+### App Registration (CLI — not possible in Bicep)
 
-### Debugging Auth Issues
-Enable APIM request tracing to inspect token acquisition and forwarding:
+An App Registration exists for this project (client ID: `authClientId` parameter). It was created for Easy Auth and may be needed if re-enabling:
+
 ```bash
-# 1. Get debug credentials
-az rest --method post --uri "https://management.azure.com/.../gateways/managed/listDebugCredentials?api-version=2023-09-01-preview" \
-  --body '{"credentialsExpireAfter":"PT1H","apiId":"...","purposes":["tracing"]}'
-
-# 2. Call API with debug header
-curl -H "Apim-Debug-Authorization: <token>" -H "Ocp-Apim-Subscription-Key: <key>" https://<apim>/orders/...
-
-# 3. Fetch trace (use Apim-Trace-Id from response headers)
-az rest --method post --uri "https://management.azure.com/.../gateways/managed/listTrace?api-version=2023-09-01-preview" \
-  --body '{"traceId":"<trace-id>"}'
+az ad app create --display-name "st-orders-api" --sign-in-audience AzureADMyOrg
+az ad app update --id <appId> --identifier-uris "api://<appId>"
+az ad sp create --id <appId>
 ```
+
+### To Re-enable Easy Auth
+1. In `container-app.bicep`: set `platform.enabled: true`
+2. In `apim-api.bicep`: add `<authentication-managed-identity resource="api://<authClientId>" />` to the inbound policy
+3. In `main.bicep`: pass `authAudience: 'api://${authClientId}'` to apimApi module
+4. Redeploy — APIM MI will acquire v2 tokens and Easy Auth will validate them
 
 ## MCP Server
 
@@ -321,9 +298,8 @@ az rest --method post --uri "https://management.azure.com/.../gateways/managed/l
 3. APIM translates the tool arguments into a REST request (query params, path params, body)
 4. APIM MCP inbound policy injects the internal subscription key via `set-header`
 5. APIM sends the REST request to the APIM REST API endpoint (`/orders/api/v1/...`)
-6. APIM REST API inbound policy acquires an Entra ID token via `authentication-managed-identity`
-7. APIM REST API calls the Container App backend with the auth token
-8. Response flows back: Container App → REST API → MCP gateway → JSON-RPC result streamed via SSE
+6. APIM REST API applies CORS + rate limiting, then forwards to the Container App backend
+7. Response flows back: Container App → REST API → MCP gateway → JSON-RPC result streamed via SSE
 
 #### Bicep schema notes
 - MCP API and policy use API version `2025-03-01-preview` (preview); all other child resources use `2024-05-01` (required for StandardV2 compatibility)

@@ -128,7 +128,6 @@ module apimApi 'modules/apim-api.bicep' = {
   params: {
     apimName: apim.outputs.name
     apiBackendUrl: containerApp.outputs.url
-    authAudience: 'api://${authClientId}'
   }
 }
 

@@ -129,14 +129,17 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
 }
 
 // --------------------------------------------------------------------------
-// Easy Auth (Microsoft Entra ID)
+// Easy Auth (Microsoft Entra ID) — currently DISABLED
+// The auth config is kept in place so it can be re-enabled by setting
+// platform.enabled: true. The openIdIssuer uses v2 format to match tokens
+// issued by StandardV2 APIM managed identity.
 // --------------------------------------------------------------------------
 resource authConfig 'Microsoft.App/containerApps/authConfigs@2024-03-01' = {
   parent: containerApp
   name: 'current'
   properties: {
     platform: {
-      enabled: true
+      enabled: false
     }
     globalValidation: {
       unauthenticatedClientAction: 'Return401'
@@ -149,7 +152,7 @@ resource authConfig 'Microsoft.App/containerApps/authConfigs@2024-03-01' = {
       azureActiveDirectory: {
         registration: {
           clientId: authClientId
-          openIdIssuer: 'https://sts.windows.net/${tenant().tenantId}/'
+          openIdIssuer: 'https://login.microsoftonline.com/${tenant().tenantId}/v2.0'
         }
         validation: {
           defaultAuthorizationPolicy: {
