@@ -54,13 +54,23 @@ Write-Host ""
 Write-Host "Deploying Phase 2 Bicep (deployApiConfig=true)..."
 
 $ResourceGroup = if ($env:AZURE_RESOURCE_GROUP) { $env:AZURE_RESOURCE_GROUP } else { "rg-$env:AZURE_ENV_NAME" }
+$PublisherName = if ($env:PUBLISHER_NAME) { $env:PUBLISHER_NAME } else { "Microelectronics Orders" }
+$AuthClientId = if ($env:AUTH_CLIENT_ID) { $env:AUTH_CLIENT_ID } else { "" }
+$AiFoundryPrincipalId = if ($env:AI_FOUNDRY_PRINCIPAL_ID) { $env:AI_FOUNDRY_PRINCIPAL_ID } else { "" }
 $deploymentName = "phase2-$(Get-Date -Format 'yyyyMMddHHmmss')"
 
 az deployment group create `
     --resource-group $ResourceGroup `
     --template-file ./infra/main.bicep `
-    --parameters ./infra/main.parameters.json `
-    --parameters deployApiConfig=true `
+    --parameters `
+        environmentName="$env:AZURE_ENV_NAME" `
+        location="$env:AZURE_LOCATION" `
+        publisherEmail="$env:PUBLISHER_EMAIL" `
+        publisherName="$PublisherName" `
+        postgresAdminPassword="$env:POSTGRES_ADMIN_PASSWORD" `
+        authClientId="$AuthClientId" `
+        aiFoundryPrincipalId="$AiFoundryPrincipalId" `
+        deployApiConfig=true `
     --name $deploymentName `
     --verbose
 

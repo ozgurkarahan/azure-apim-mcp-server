@@ -59,8 +59,15 @@ RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-rg-${AZURE_ENV_NAME}}"
 az deployment group create \
   --resource-group "$RESOURCE_GROUP" \
   --template-file ./infra/main.bicep \
-  --parameters ./infra/main.parameters.json \
-  --parameters deployApiConfig=true \
+  --parameters \
+    environmentName="$AZURE_ENV_NAME" \
+    location="$AZURE_LOCATION" \
+    publisherEmail="$PUBLISHER_EMAIL" \
+    publisherName="${PUBLISHER_NAME:-Microelectronics Orders}" \
+    postgresAdminPassword="$POSTGRES_ADMIN_PASSWORD" \
+    authClientId="${AUTH_CLIENT_ID:-}" \
+    aiFoundryPrincipalId="${AI_FOUNDRY_PRINCIPAL_ID:-}" \
+    deployApiConfig=true \
   --name "phase2-$(date +%Y%m%d%H%M%S)" \
   --verbose
 
