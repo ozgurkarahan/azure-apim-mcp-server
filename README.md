@@ -28,7 +28,7 @@ graph LR
 | Database | PostgreSQL 16 |
 | ORM | SQLAlchemy 2.0 (async) |
 | Migrations | Alembic |
-| MCP Server | APIM native MCP gateway (primary) / Python FastMCP (local) |
+| MCP Server | APIM native MCP gateway |
 | Infrastructure | Azure Bicep |
 | Hosting | Azure Container Apps |
 | API Gateway | Azure API Management (StandardV2 tier) |
@@ -85,7 +85,7 @@ All endpoints are under `/api/v1/`.
 
 ## MCP Server
 
-### APIM-native MCP (Primary)
+### APIM-native MCP
 
 APIM exposes 8 REST API operations as MCP tools at `/st-orders-mcp/mcp`. Deployed via Bicep (`infra/modules/apim-mcp.bicep`), no custom code required.
 
@@ -100,24 +100,6 @@ APIM exposes 8 REST API operations as MCP tools at `/st-orders-mcp/mcp`. Deploye
       "url": "https://<apim-name>.azure-api.net/st-orders-mcp/mcp",
       "headers": {
         "Ocp-Apim-Subscription-Key": "<your-subscription-key>"
-      }
-    }
-  }
-}
-```
-
-### Standalone MCP Server (Local)
-
-For local development via stdio:
-```json
-{
-  "mcpServers": {
-    "st-orders-local": {
-      "command": "python",
-      "args": ["-m", "src.mcp_server.server"],
-      "cwd": "/path/to/azure-apim-mcp-server",
-      "env": {
-        "API_BASE_URL": "http://localhost:8000"
       }
     }
   }
@@ -157,7 +139,6 @@ az role assignment create --assignee $SP_OBJECT_ID \
 | `POSTGRES_ADMIN_PASSWORD` | Yes | PostgreSQL admin password (**must not contain `@`** — breaks asyncpg URL parsing) |
 | `PUBLISHER_EMAIL` | Yes | Email address for the APIM publisher |
 | `AUTH_CLIENT_ID` | No | Entra ID App Registration client ID (only needed if enabling Easy Auth) |
-| `AI_FOUNDRY_PRINCIPAL_ID` | No | AI Foundry hub managed identity principal ID (only needed for Foundry integration) |
 
 **Notes:**
 - APIM StandardV2 takes ~5 minutes to provision on the first deployment.
@@ -199,13 +180,12 @@ az deployment group create \
 6. API Management (StandardV2 tier, system-assigned MI)
 7. APIM REST API (imported from OpenAPI)
 8. APIM MCP API (`apiType: 'mcp'`, 8 tools)
-9. AI Foundry role assignments (conditional)
 
 ## Project Structure
 
 ```
 ├── .github/workflows/    # CI/CD pipelines
-├── infra/                # Azure Bicep templates (main + 9 modules)
+├── infra/                # Azure Bicep templates (main + 8 modules)
 │   ├── main.bicep
 │   └── modules/
 │       ├── managed-identity.bicep
@@ -215,10 +195,8 @@ az deployment group create \
 │       ├── container-app.bicep
 │       ├── apim.bicep
 │       ├── apim-api.bicep      # REST API + product + subscription
-│       ├── apim-mcp.bicep      # MCP server (apiType: 'mcp')
-│       └── apim-foundry-roles.bicep  # AI Foundry role assignments
+│       └── apim-mcp.bicep      # MCP server (apiType: 'mcp')
 ├── src/app/              # FastAPI application
-├── src/mcp_server/       # Standalone MCP server (FastMCP)
 ├── alembic/              # Database migrations
 ├── tests/                # Test suite
 ├── Dockerfile

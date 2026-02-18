@@ -1,7 +1,7 @@
 # CLAUDE.md — azure-apim-mcp-server
 
 ## Project Overview
-Microelectronics semiconductor orders API deployed to Azure Container Apps, exposed through Azure API Management (StandardV2) as both a REST API and MCP (Model Context Protocol) server, linked to AI Foundry as an AI Gateway.
+Microelectronics semiconductor orders API deployed to Azure Container Apps, exposed through Azure API Management (StandardV2) as both a REST API and MCP (Model Context Protocol) server.
 
 ## Architecture
 
@@ -36,8 +36,7 @@ graph LR
 | Database | PostgreSQL 16 (Azure Flexible Server in prod, Docker locally) |
 | ORM | SQLAlchemy 2.0 (async) |
 | Migrations | Alembic |
-| MCP Server (APIM) | APIM native MCP gateway (`apiType: 'mcp'`) — zero custom code |
-| MCP Server (local) | Python `mcp` SDK (FastMCP) — for stdio/local dev |
+| MCP Server | APIM native MCP gateway (`apiType: 'mcp'`) — zero custom code |
 | Infrastructure | Azure Bicep |
 | Hosting | Azure Container Apps |
 | API Gateway | Azure API Management (StandardV2 tier) |
@@ -79,15 +78,6 @@ ruff check src/ tests/
 ```bash
 alembic upgrade head
 alembic revision --autogenerate -m "description"
-```
-
-### MCP Server (Local/Standalone)
-```bash
-# Via stdio (for Claude Desktop / VS Code)
-python -m src.mcp_server.server
-
-# Set API_BASE_URL if the API runs on a different host
-API_BASE_URL=http://localhost:8000 python -m src.mcp_server.server
 ```
 
 ## Code Conventions
@@ -168,7 +158,7 @@ az deployment group create \
 3. **Azure Container Registry** (Basic SKU) — hosts Docker images
 4. **PostgreSQL Flexible Server** (Burstable B1ms, v16, 32GB) + database `storders`
 5. **Container Apps Environment + Container App** — runs FastAPI on port 8000, min 1 / max 3 replicas
-6. **API Management** (StandardV2 tier, system-assigned MI) — gateway for REST API + MCP, linked to AI Foundry as AI Gateway
+6. **API Management** (StandardV2 tier, system-assigned MI) — gateway for REST API + MCP
 7. **APIM REST API** (`st-orders-api`) — imported from OpenAPI spec, exposes `/orders/api/v1/*`
 8. **APIM MCP API** (`st-orders-mcp`, `apiType: 'mcp'`) — exposes 8 REST operations as MCP tools at `/st-orders-mcp/mcp`, routes tool calls through the APIM REST API (not directly to backend)
 9. **Easy Auth** (Container App authConfig) — **disabled**; config retained for optional re-enablement with v2 token issuer
@@ -184,16 +174,14 @@ apim ──────┬── containerApp (depends on: identity, acr, postgr
             ├── apimApi (depends on: apim, containerApp)
             │       │
             │       ▼
-            ├── apimMcp (depends on: apim, apimApi)
-            │
-            └── apimFoundryRoles (depends on: apim; conditional on aiFoundryPrincipalId)
+            └── apimMcp (depends on: apim, apimApi)
 
 postgres ──────────┘
 ```
 
 ### CI/CD (GitHub Actions)
 - **ci.yml**: Runs on PRs — lint with ruff, test with pytest
-- **deploy.yml**: Runs on push to main — build/push Docker image, deploy Bicep infra, update Container App, import OpenAPI spec into APIM
+- **deploy.yml**: Runs on push to main — deploy Bicep infra, build/push Docker image, update Container App, import OpenAPI spec into APIM
 
 ### Required GitHub Secrets
 - `AZURE_CREDENTIALS` — service principal JSON
@@ -201,7 +189,6 @@ postgres ──────────┘
 - `POSTGRES_ADMIN_PASSWORD` — PostgreSQL admin password
 - `PUBLISHER_EMAIL` — APIM publisher email
 - `AUTH_CLIENT_ID` — Entra ID App Registration client ID for Easy Auth
-- `AI_FOUNDRY_PRINCIPAL_ID` — Principal ID of the AI Foundry hub managed identity (for APIM role assignment)
 
 ## APIM Configuration
 - API imported from Container App's `/openapi.json`
@@ -212,38 +199,6 @@ postgres ──────────┘
 - REST API available at: `https://<apim>.azure-api.net/orders/api/v1/*`
 - MCP API available at: `https://<apim>.azure-api.net/st-orders-mcp/mcp` (serviceUrl → `/orders`)
 
-## AI Foundry Integration (AI Gateway)
-
-The APIM instance (StandardV2) is linked to AI Foundry as an **AI Gateway**, enabling token limits, quotas, agent governance, and a unified control plane for API/model calls.
-
-### Requirements
-- APIM must be **StandardV2** (v2 architecture) — classic tiers (Developer, Basic, Standard) are not compatible
-- The AI Foundry hub's managed identity needs **API Management Service Contributor** role on the APIM instance (deployed via `apim-foundry-roles.bicep`)
-
-### Resources
-| Item | Value |
-|------|-------|
-| AI Foundry hub | `aoai-c544zegk5tvc2` in `rg-ai-search-agent` |
-| Foundry project | `proj-c544zegk5tvc2` |
-| Foundry MI principal ID | `16f8dbdc-61c3-42ff-a3c7-8692833c692e` |
-
-### Linking APIM to AI Foundry (Portal — one-time manual step)
-AI Gateway linking cannot be done via CLI or Bicep. After deployment:
-1. Go to [Microsoft Foundry portal](https://ai.azure.com)
-2. Select **Operate** > **Admin console** > **AI Gateway** tab
-3. **Add AI Gateway** > select Foundry resource `aoai-c544zegk5tvc2`
-4. Choose **Use existing** APIM > select `apim-mcp-dev-apim`
-5. Name the gateway (e.g., `st-orders-gateway`) > **Add**
-6. Enable project: select the gateway > **Add project to gateway** > select `proj-c544zegk5tvc2`
-
-### SKU Migration Note
-Classic Developer tier cannot be upgraded in-place to StandardV2. To migrate:
-```bash
-az apim delete --name apim-mcp-dev-apim --resource-group rg-poc-apim --yes
-az apim deletedservice purge --service-name apim-mcp-dev-apim --location swedencentral
-# Then redeploy via Bicep — StandardV2 provisions in ~5 min
-```
-
 ## Authentication
 
 Access control is handled at the APIM layer via **subscription keys**. Easy Auth on the Container App is **disabled**.
@@ -252,37 +207,9 @@ Access control is handled at the APIM layer via **subscription keys**. Easy Auth
 
 **MCP flow**: Client → APIM MCP Server (subscription key) → APIM REST API (internal subscription key via `set-header`) → Container App → Backend
 
-### Easy Auth (Disabled)
-
-Easy Auth (`Microsoft.App/containerApps/authConfigs`) is deployed but disabled (`platform.enabled: false`). The auth config is retained in Bicep so it can be re-enabled if needed.
-
-If re-enabling Easy Auth, note these key findings from the StandardV2 migration:
-
-**StandardV2 APIM issues v2 tokens**: Unlike the classic Developer tier (which issued v1 tokens via IMDS), the StandardV2 APIM managed identity issues **v2 tokens**. The v2 token has `iss: "https://login.microsoftonline.com/{tenantId}/v2.0"` and `ver: "2.0"`. The Easy Auth `openIdIssuer` in Bicep is already set to the v2 format to match.
-
-**allowedPrincipals, not allowedApplications**: Easy Auth's `defaultAuthorizationPolicy.allowedApplications: []` means "deny all callers" (not "allow all"). Use `allowedPrincipals.identities` with the APIM MI's `principalId` (checks the `oid` claim).
-
-**Dual audiences**: The `allowedAudiences` list includes both `api://<clientId>` (Application ID URI) and the raw `<clientId>` to accept tokens regardless of which audience format was requested.
-
-### App Registration (CLI — not possible in Bicep)
-
-An App Registration exists for this project (client ID: `authClientId` parameter). It was created for Easy Auth and may be needed if re-enabling:
-
-```bash
-az ad app create --display-name "st-orders-api" --sign-in-audience AzureADMyOrg
-az ad app update --id <appId> --identifier-uris "api://<appId>"
-az ad sp create --id <appId>
-```
-
-### To Re-enable Easy Auth
-1. In `container-app.bicep`: set `platform.enabled: true`
-2. In `apim-api.bicep`: add `<authentication-managed-identity resource="api://<authClientId>" />` to the inbound policy
-3. In `main.bicep`: pass `authAudience: 'api://${authClientId}'` to apimApi module
-4. Redeploy — APIM MI will acquire v2 tokens and Easy Auth will validate them
-
 ## MCP Server
 
-### A. APIM-native MCP (Primary) — Zero custom code
+### APIM-native MCP — Zero custom code
 - APIM natively converts the imported REST API into an MCP server
 - Endpoint: `https://<apim>.azure-api.net/st-orders-mcp/mcp`
 - Transport: Streamable HTTP (JSON-RPC 2.0 over SSE), auth via subscription key
@@ -308,11 +235,6 @@ az ad sp create --id <appId>
 - Bicep shows `BCP037` warnings for MCP properties — these are expected and can be ignored
 - Subscription key for internal routing is read via `listSecrets()` on the existing subscription and stored as a secret named value
 
-### B. Standalone MCP Server (Secondary) — For local/direct use
-- `src/mcp_server/server.py` using Python `mcp` SDK (FastMCP)
-- Tools: list_products, get_product, list_customers, get_customer, list_orders, get_order, create_order, update_order_status
-- Runs locally via stdio for Claude Desktop/VS Code
-
 ### Client Configuration (APIM)
 ```json
 {
@@ -322,22 +244,6 @@ az ad sp create --id <appId>
       "url": "https://<apim>.azure-api.net/st-orders-mcp/mcp",
       "headers": {
         "Ocp-Apim-Subscription-Key": "<your-subscription-key>"
-      }
-    }
-  }
-}
-```
-
-### Client Configuration (Local Standalone)
-```json
-{
-  "mcpServers": {
-    "st-orders-local": {
-      "command": "python",
-      "args": ["-m", "src.mcp_server.server"],
-      "cwd": "/path/to/azure-apim-mcp-server",
-      "env": {
-        "API_BASE_URL": "http://localhost:8000"
       }
     }
   }
@@ -363,7 +269,7 @@ curl -X POST ... -d '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"na
 ## Project Structure
 ```
 ├── .github/workflows/    # CI (lint+test) and Deploy (build, infra, app, APIM)
-├── infra/                # Azure Bicep templates (main + 9 modules)
+├── infra/                # Azure Bicep templates (main + 8 modules)
 │   ├── main.bicep        # Orchestrator
 │   └── modules/
 │       ├── managed-identity.bicep
@@ -373,8 +279,7 @@ curl -X POST ... -d '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"na
 │       ├── container-app.bicep
 │       ├── apim.bicep
 │       ├── apim-api.bicep      # REST API import + product + subscription
-│       ├── apim-mcp.bicep       # MCP server (routes through REST API)
-│       └── apim-foundry-roles.bicep  # AI Foundry role assignments (conditional)
+│       └── apim-mcp.bicep       # MCP server (routes through REST API)
 ├── src/app/              # FastAPI application
 │   ├── main.py           # Entry point
 │   ├── config.py         # pydantic-settings
@@ -384,7 +289,6 @@ curl -X POST ... -d '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"na
 │   ├── routers/          # health, customers, products, orders
 │   ├── services/         # Business logic per entity
 │   └── seed.py           # Microelectronics themed seed data
-├── src/mcp_server/       # Standalone MCP server (FastMCP)
 ├── alembic/              # Database migrations
 ├── tests/                # Pytest test suite
 ├── Dockerfile            # Multi-stage Python 3.11-slim
