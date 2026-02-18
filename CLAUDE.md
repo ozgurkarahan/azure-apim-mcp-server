@@ -137,18 +137,26 @@ All endpoints are under `/api/v1/`.
 
 ## Azure Deployment
 
-### Deploy Infrastructure
+### Primary: Deploy with `azd`
 ```bash
-az group create --name rg-poc-apim --location swedencentral
-az deployment group create \
-  --resource-group rg-poc-apim \
-  --template-file infra/main.bicep \
-  --parameters environmentName=apim-mcp-dev \
-    publisherEmail=<email> \
-    postgresAdminPassword=<password-without-@> \
-    authClientId=<app-registration-client-id> \
-    containerImage=<acr>.azurecr.io/st-orders-api:latest
+azd init -e dev
+azd env set PUBLISHER_EMAIL <email>
+azd env set POSTGRES_ADMIN_PASSWORD <password-without-@>
+azd up
 ```
+
+**How it works:** `azd up` runs a two-phase deployment orchestrated by `azure.yaml`:
+1. **Phase 1** — Provisions infrastructure via `infra/main.bicep` (using `main.bicepparam`) and builds/deploys the app container
+2. **Phase 2** — The `postdeploy` hook (`hooks/postdeploy.sh` / `.ps1`) waits for health check, then re-runs Bicep with `DEPLOY_API_CONFIG=true` to import OpenAPI spec + configure MCP
+
+**Key environment variables** (set via `azd env set`, read by `main.bicepparam`):
+- `PUBLISHER_EMAIL` (required) — APIM publisher email
+- `POSTGRES_ADMIN_PASSWORD` (required) — must not contain `@`
+- `AUTH_CLIENT_ID` (optional) — Entra ID App Registration client ID
+- `AI_FOUNDRY_PRINCIPAL_ID` (optional) — AI Foundry MI for APIM role assignment
+
+### Secondary: GitHub Actions CI/CD
+The `.github/workflows/deploy.yml` workflow runs on push to `main` with 4 jobs: deploy-infrastructure → build-and-push → deploy-app → configure-apim. Requires `AZURE_CREDENTIALS`, `AZURE_RESOURCE_GROUP`, `POSTGRES_ADMIN_PASSWORD`, and `PUBLISHER_EMAIL` as GitHub secrets.
 
 > Note: APIM StandardV2 takes ~5 min to provision (much faster than the old Developer tier). Container App and APIM deploy sequentially due to Bicep dependency ordering.
 
@@ -181,14 +189,15 @@ postgres ──────────┘
 
 ### CI/CD (GitHub Actions)
 - **ci.yml**: Runs on PRs — lint with ruff, test with pytest
-- **deploy.yml**: Runs on push to main — deploy Bicep infra, build/push Docker image, update Container App, import OpenAPI spec into APIM
+- **deploy.yml**: Runs on push to main — 4-phase pipeline: deploy-infrastructure → build-and-push → deploy-app → configure-apim (health check + Phase 2 Bicep with API import + MCP config)
 
 ### Required GitHub Secrets
-- `AZURE_CREDENTIALS` — service principal JSON
+- `AZURE_CREDENTIALS` — service principal JSON (SP needs Contributor + User Access Administrator roles)
 - `AZURE_RESOURCE_GROUP` — resource group name
 - `POSTGRES_ADMIN_PASSWORD` — PostgreSQL admin password
 - `PUBLISHER_EMAIL` — APIM publisher email
-- `AUTH_CLIENT_ID` — Entra ID App Registration client ID for Easy Auth
+- `AUTH_CLIENT_ID` — (optional) Entra ID App Registration client ID
+- `AI_FOUNDRY_PRINCIPAL_ID` — (optional) AI Foundry MI principal ID
 
 ## APIM Configuration
 - API imported from Container App's `/openapi.json`
@@ -268,9 +277,11 @@ curl -X POST ... -d '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"na
 
 ## Project Structure
 ```
-├── .github/workflows/    # CI (lint+test) and Deploy (build, infra, app, APIM)
+├── .github/workflows/    # CI (lint+test) and Deploy (4-phase pipeline)
+├── hooks/                # azd lifecycle hooks (postdeploy = Phase 2 Bicep)
 ├── infra/                # Azure Bicep templates (main + 8 modules)
 │   ├── main.bicep        # Orchestrator
+│   ├── main.bicepparam   # Parameters (reads env vars via readEnvironmentVariable)
 │   └── modules/
 │       ├── managed-identity.bicep
 │       ├── keyvault.bicep
@@ -291,6 +302,7 @@ curl -X POST ... -d '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"na
 │   └── seed.py           # Microelectronics themed seed data
 ├── alembic/              # Database migrations
 ├── tests/                # Pytest test suite
+├── azure.yaml            # Azure Developer CLI project config
 ├── Dockerfile            # Multi-stage Python 3.11-slim
 └── docker-compose.yml    # Local dev (PostgreSQL + app)
 ```

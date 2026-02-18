@@ -110,13 +110,68 @@ APIM exposes 8 REST API operations as MCP tools at `/st-orders-mcp/mcp`. Deploye
 
 ### Prerequisites
 
-**1. Create a resource group:**
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
+- [Azure Developer CLI (`azd`)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
+- A resource group (e.g., `az group create --name rg-poc-apim --location swedencentral`)
+
+### Quick Deploy with `azd`
+
+This is the primary deployment method. `azd` handles infrastructure provisioning, app deployment, and post-deploy configuration in a single command.
 
 ```bash
-az group create --name rg-poc-apim --location swedencentral
+# Initialize the azd environment
+azd init -e dev
+
+# Set required parameters
+azd env set PUBLISHER_EMAIL <your-email>
+azd env set POSTGRES_ADMIN_PASSWORD <password-without-@>
+
+# Optional parameters
+azd env set AUTH_CLIENT_ID <app-registration-client-id>
+azd env set AI_FOUNDRY_PRINCIPAL_ID <principal-id>
+
+# Deploy everything
+azd up
 ```
 
-**2. Create a Service Principal with the required roles:**
+**Environment variables** (read by `infra/main.bicepparam`):
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `PUBLISHER_EMAIL` | Yes | Email address for the APIM publisher |
+| `POSTGRES_ADMIN_PASSWORD` | Yes | PostgreSQL admin password (**must not contain `@`** — breaks asyncpg URL parsing) |
+| `AUTH_CLIENT_ID` | No | Entra ID App Registration client ID (only if enabling Easy Auth) |
+| `AI_FOUNDRY_PRINCIPAL_ID` | No | AI Foundry hub managed identity principal ID for APIM role assignment |
+
+**How it works:**
+1. **Phase 1** — `azd up` provisions infrastructure (ACR, APIM, PostgreSQL, Container App with placeholder image) and builds/deploys the app container
+2. **Phase 2** — The `postdeploy` hook (`hooks/postdeploy.sh` / `postdeploy.ps1`) automatically runs after deploy: waits for the app health check, then re-runs the Bicep deployment with `DEPLOY_API_CONFIG=true` to import the OpenAPI spec and configure MCP
+
+This means a single `azd up` handles the entire deployment — no manual two-phase steps needed.
+
+> **Note:** APIM StandardV2 takes ~5 minutes to provision on the first deployment.
+
+### GitHub Actions (CI/CD)
+
+The GitHub Actions workflow (`.github/workflows/deploy.yml`) runs on push to `main` and automates the same two-phase flow:
+
+1. **deploy-infrastructure** — Phase 1 Bicep deployment (base infrastructure)
+2. **build-and-push** — Build Docker image, push to ACR
+3. **deploy-app** — Update Container App with the new image
+4. **configure-apim** — Health check + Phase 2 Bicep deployment (API import + MCP config)
+
+**Required GitHub secrets:**
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `AZURE_CREDENTIALS` | Yes | Service principal JSON from `az ad sp create-for-rbac` |
+| `AZURE_RESOURCE_GROUP` | Yes | Resource group name (e.g., `rg-poc-apim`) |
+| `POSTGRES_ADMIN_PASSWORD` | Yes | PostgreSQL admin password (**must not contain `@`**) |
+| `PUBLISHER_EMAIL` | Yes | Email address for the APIM publisher |
+| `AUTH_CLIENT_ID` | No | Entra ID App Registration client ID |
+| `AI_FOUNDRY_PRINCIPAL_ID` | No | AI Foundry hub managed identity principal ID |
+
+**Service Principal setup** (needed for GitHub Actions):
 
 ```bash
 # Create SP with Contributor role
@@ -128,47 +183,6 @@ SP_OBJECT_ID=$(az ad sp list --display-name "github-deploy-sp" --query "[0].id" 
 az role assignment create --assignee $SP_OBJECT_ID \
   --role "User Access Administrator" \
   --scope /subscriptions/<subscription-id>/resourceGroups/rg-poc-apim
-```
-
-**3. Configure GitHub secrets:**
-
-| Secret | Required | Description |
-|--------|----------|-------------|
-| `AZURE_CREDENTIALS` | Yes | Service principal JSON from `az ad sp create-for-rbac` |
-| `AZURE_RESOURCE_GROUP` | Yes | Resource group name (e.g., `rg-poc-apim`) |
-| `POSTGRES_ADMIN_PASSWORD` | Yes | PostgreSQL admin password (**must not contain `@`** — breaks asyncpg URL parsing) |
-| `PUBLISHER_EMAIL` | Yes | Email address for the APIM publisher |
-| `AUTH_CLIENT_ID` | No | Entra ID App Registration client ID (only needed if enabling Easy Auth) |
-
-**Notes:**
-- APIM StandardV2 takes ~5 minutes to provision on the first deployment.
-- The deploy workflow uses a two-phase Bicep deployment: Phase 1 creates base infrastructure (ACR, APIM, Container App with placeholder image), Phase 2 imports the OpenAPI spec and configures MCP after the app is healthy. This means the first deployment works cleanly without any manual steps.
-
-### Manual Deployment
-
-For manual deployment outside of GitHub Actions:
-
-```bash
-# Phase 1: Base infrastructure
-az deployment group create \
-  --resource-group rg-poc-apim \
-  --template-file infra/main.bicep \
-  --parameters environmentName=apim-mcp-dev \
-    publisherEmail=<email> \
-    postgresAdminPassword=<password-without-@> \
-    deployApiConfig=false
-
-# Build and push your image to ACR, then update the Container App
-
-# Phase 2: API import + MCP config (after app is healthy)
-az deployment group create \
-  --resource-group rg-poc-apim \
-  --template-file infra/main.bicep \
-  --parameters environmentName=apim-mcp-dev \
-    publisherEmail=<email> \
-    postgresAdminPassword=<password-without-@> \
-    containerImage=<acr>.azurecr.io/st-orders-api:latest \
-    deployApiConfig=true
 ```
 
 ### Azure Resources (via Bicep)
@@ -185,8 +199,12 @@ az deployment group create \
 
 ```
 ├── .github/workflows/    # CI/CD pipelines
+├── hooks/                # azd lifecycle hooks
+│   ├── postdeploy.sh     # Phase 2 Bicep deployment (Linux/macOS)
+│   └── postdeploy.ps1   # Phase 2 Bicep deployment (Windows)
 ├── infra/                # Azure Bicep templates (main + 8 modules)
 │   ├── main.bicep
+│   ├── main.bicepparam   # Parameters (reads env vars from azd)
 │   └── modules/
 │       ├── managed-identity.bicep
 │       ├── keyvault.bicep
@@ -199,6 +217,7 @@ az deployment group create \
 ├── src/app/              # FastAPI application
 ├── alembic/              # Database migrations
 ├── tests/                # Test suite
+├── azure.yaml            # Azure Developer CLI project config
 ├── Dockerfile
 └── docker-compose.yml
 ```

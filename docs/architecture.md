@@ -187,7 +187,49 @@ graph TB
 
 </details>
 
-## CI/CD Pipeline
+## Deployment with `azd`
+
+The primary deployment method uses the [Azure Developer CLI (`azd`)](https://learn.microsoft.com/azure/developer/azure-developer-cli/). The project is configured via `azure.yaml` with a two-phase Bicep deployment orchestrated by a postdeploy hook.
+
+![Deployment with azd](detail-azd.png)
+
+<details>
+<summary>Mermaid source (click to expand)</summary>
+
+```mermaid
+graph LR
+    DEV["Developer"]
+
+    subgraph "azd up"
+        PROVISION["Phase 1<br/>Provision Infrastructure<br/>(main.bicep via main.bicepparam)"]
+        DEPLOY_APP["Build & Deploy<br/>Container App"]
+        HOOK["postdeploy hook<br/>(hooks/postdeploy.sh)"]
+    end
+
+    AZURE["Azure Resources<br/>(ACR, APIM, PostgreSQL,<br/>Container App)"]
+    HEALTH["Health Check<br/>/health → 200"]
+    PHASE2["Phase 2 Bicep<br/>DEPLOY_API_CONFIG=true<br/>(API import + MCP config)"]
+
+    DEV -->|"azd up"| PROVISION
+    PROVISION -->|"Bicep deploy"| AZURE
+    PROVISION --> DEPLOY_APP
+    DEPLOY_APP -->|"docker build + push"| AZURE
+    DEPLOY_APP --> HOOK
+    HOOK --> HEALTH
+    HEALTH --> PHASE2
+    PHASE2 -->|"OpenAPI import +<br/>MCP tools"| AZURE
+```
+
+</details>
+
+**Key files:**
+- `azure.yaml` — project configuration (services, hooks)
+- `infra/main.bicepparam` — parameters read from environment variables (set via `azd env set`)
+- `hooks/postdeploy.sh` / `postdeploy.ps1` — waits for health, runs Phase 2 Bicep
+
+## CI/CD Pipeline (GitHub Actions)
+
+The GitHub Actions workflow (`.github/workflows/deploy.yml`) automates the same two-phase deployment on push to `main`.
 
 ![CI/CD Pipeline](detail-cicd.png)
 
@@ -199,10 +241,10 @@ graph LR
     GH["GitHub<br/>(push to main)"]
 
     subgraph "GitHub Actions Pipeline"
-        BUILD["Job 1<br/>Build & Push"]
-        INFRA["Job 2<br/>Deploy Infrastructure"]
-        DEPLOY["Job 3<br/>Deploy App"]
-        CONFIG["Job 4<br/>Configure APIM"]
+        INFRA["Job 1<br/>deploy-infrastructure<br/>(Phase 1 Bicep)"]
+        BUILD["Job 2<br/>build-and-push<br/>(Docker → ACR)"]
+        DEPLOY["Job 3<br/>deploy-app<br/>(update container image)"]
+        CONFIG["Job 4<br/>configure-apim<br/>(health check + Phase 2 Bicep)"]
     end
 
     ACR["ACR<br/>apimmcpdevacr"]
@@ -210,14 +252,14 @@ graph LR
     APP["Container App<br/>apim-mcp-dev-app"]
     APIM["APIM<br/>apim-mcp-dev-apim"]
 
-    GH --> BUILD
-    BUILD -->|"docker push<br/>st-orders-api:latest"| ACR
-    BUILD --> INFRA
-    INFRA -->|"az deployment group create<br/>infra/main.bicep"| AZURE
-    INFRA --> DEPLOY
-    DEPLOY -->|"update container image"| APP
+    GH --> INFRA
+    INFRA -->|"az deployment group create<br/>infra/main.bicepparam"| AZURE
+    INFRA --> BUILD
+    BUILD -->|"docker push<br/>st-orders-api:sha"| ACR
+    BUILD --> DEPLOY
+    DEPLOY -->|"az containerapp update"| APP
     DEPLOY --> CONFIG
-    CONFIG -->|"import openapi.json"| APIM
+    CONFIG -->|"Phase 2 Bicep<br/>DEPLOY_API_CONFIG=true"| APIM
 ```
 
 </details>
@@ -246,6 +288,7 @@ Infrastructure-as-Code is organized in `infra/`:
 ```
 infra/
   main.bicep                    # Orchestrator
+  main.bicepparam               # Parameters (reads env vars from azd)
   modules/
     managed-identity.bicep      # User-assigned MI
     keyvault.bicep              # Key Vault + secrets
