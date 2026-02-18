@@ -1,0 +1,23 @@
+# Azure Developer CLI (azd) project configuration
+# Usage: azd init -e dev && azd up
+name: azure-apim-mcp-server
+infra:
+  provider: bicep
+  path: ./infra
+  module: main
+services:
+  api:
+    project: ./
+    language: py
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+      context: ./
+hooks:
+  postdeploy:
+    posix:
+      shell: sh
+      run: ./hooks/postdeploy.sh
+    windows:
+      shell: pwsh
+      run: ./hooks/postdeploy.ps1

@@ -160,7 +160,7 @@ az deployment group create \
     containerImage=<acr>.azurecr.io/st-orders-api:latest
 ```
 
-> Note: APIM StandardV2 takes ~5 min to provision (much faster than the old Developer tier). Container App depends on APIM (needs its `principalId` for Easy Auth), so they deploy sequentially.
+> Note: APIM StandardV2 takes ~5 min to provision (much faster than the old Developer tier). Container App and APIM deploy sequentially due to Bicep dependency ordering.
 
 ### Azure Resources (via Bicep)
 1. **User-assigned Managed Identity** — used by Container App to pull from ACR

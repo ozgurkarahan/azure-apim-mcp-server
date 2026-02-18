@@ -8,7 +8,7 @@ A semiconductor orders API built with Python/FastAPI and PostgreSQL, deployed to
 graph LR
     Client[REST Client] -->|subscription key| APIM[Azure API Management]
     Claude[Claude Desktop] -->|MCP over HTTP| APIM
-    APIM -->|Entra ID token via MI| CA[Container App + Easy Auth]
+    APIM --> CA[Container App]
     CA -->|SQLAlchemy| PG[(PostgreSQL)]
     DevPortal[Developer Portal] --> APIM
     ACR[Container Registry] -->|image pull| CA
@@ -16,9 +16,9 @@ graph LR
 
 ### How It Works
 
-**REST API**: Clients call APIM with a subscription key at `/orders/api/v1/*`. APIM authenticates to the Container App using a managed identity (Entra ID token), then forwards the request.
+**REST API**: Clients call APIM with a subscription key at `/orders/api/v1/*`. APIM forwards the request to the Container App backend.
 
-**MCP Server**: AI assistants (Claude Desktop, VS Code, etc.) connect to APIM at `/st-orders-mcp/mcp` using Streamable HTTP transport. APIM natively translates MCP tool calls (JSON-RPC) into REST API operations — no custom MCP code needed. The same Entra ID authentication flow protects the backend.
+**MCP Server**: AI assistants (Claude Desktop, VS Code, etc.) connect to APIM at `/st-orders-mcp/mcp` using Streamable HTTP transport. APIM natively translates MCP tool calls (JSON-RPC) into REST API operations — no custom MCP code needed. MCP tool calls route through the APIM REST API (not directly to the backend), with an internal subscription key injected via policy.
 
 ## Tech Stack
 
@@ -31,8 +31,8 @@ graph LR
 | MCP Server | APIM native MCP gateway (primary) / Python FastMCP (local) |
 | Infrastructure | Azure Bicep |
 | Hosting | Azure Container Apps |
-| API Gateway | Azure API Management (Developer tier) |
-| Auth | Microsoft Entra ID (Easy Auth + Managed Identity) |
+| API Gateway | Azure API Management (StandardV2 tier) |
+| Auth | APIM subscription keys |
 | CI/CD | GitHub Actions |
 | Container Registry | Azure Container Registry |
 
@@ -126,18 +126,68 @@ For local development via stdio:
 
 ## Azure Deployment
 
-### Deploy Infrastructure
+### Prerequisites
+
+**1. Create a resource group:**
 
 ```bash
 az group create --name rg-poc-apim --location swedencentral
+```
+
+**2. Create a Service Principal with the required roles:**
+
+```bash
+# Create SP with Contributor role
+az ad sp create-for-rbac --name "github-deploy-sp" --role Contributor \
+  --scopes /subscriptions/<subscription-id>/resourceGroups/rg-poc-apim
+
+# The SP also needs User Access Administrator for Bicep role assignments
+SP_OBJECT_ID=$(az ad sp list --display-name "github-deploy-sp" --query "[0].id" -o tsv)
+az role assignment create --assignee $SP_OBJECT_ID \
+  --role "User Access Administrator" \
+  --scope /subscriptions/<subscription-id>/resourceGroups/rg-poc-apim
+```
+
+**3. Configure GitHub secrets:**
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `AZURE_CREDENTIALS` | Yes | Service principal JSON from `az ad sp create-for-rbac` |
+| `AZURE_RESOURCE_GROUP` | Yes | Resource group name (e.g., `rg-poc-apim`) |
+| `POSTGRES_ADMIN_PASSWORD` | Yes | PostgreSQL admin password (**must not contain `@`** — breaks asyncpg URL parsing) |
+| `PUBLISHER_EMAIL` | Yes | Email address for the APIM publisher |
+| `AUTH_CLIENT_ID` | No | Entra ID App Registration client ID (only needed if enabling Easy Auth) |
+| `AI_FOUNDRY_PRINCIPAL_ID` | No | AI Foundry hub managed identity principal ID (only needed for Foundry integration) |
+
+**Notes:**
+- APIM StandardV2 takes ~5 minutes to provision on the first deployment.
+- The deploy workflow uses a two-phase Bicep deployment: Phase 1 creates base infrastructure (ACR, APIM, Container App with placeholder image), Phase 2 imports the OpenAPI spec and configures MCP after the app is healthy. This means the first deployment works cleanly without any manual steps.
+
+### Manual Deployment
+
+For manual deployment outside of GitHub Actions:
+
+```bash
+# Phase 1: Base infrastructure
 az deployment group create \
   --resource-group rg-poc-apim \
   --template-file infra/main.bicep \
   --parameters environmentName=apim-mcp-dev \
     publisherEmail=<email> \
     postgresAdminPassword=<password-without-@> \
-    authClientId=<app-registration-client-id> \
-    containerImage=<acr>.azurecr.io/st-orders-api:latest
+    deployApiConfig=false
+
+# Build and push your image to ACR, then update the Container App
+
+# Phase 2: API import + MCP config (after app is healthy)
+az deployment group create \
+  --resource-group rg-poc-apim \
+  --template-file infra/main.bicep \
+  --parameters environmentName=apim-mcp-dev \
+    publisherEmail=<email> \
+    postgresAdminPassword=<password-without-@> \
+    containerImage=<acr>.azurecr.io/st-orders-api:latest \
+    deployApiConfig=true
 ```
 
 ### Azure Resources (via Bicep)
@@ -146,16 +196,16 @@ az deployment group create \
 3. Azure Container Registry (Basic)
 4. PostgreSQL Flexible Server (B1ms, v16)
 5. Container Apps Environment + Container App
-6. API Management (Developer tier, system-assigned MI)
+6. API Management (StandardV2 tier, system-assigned MI)
 7. APIM REST API (imported from OpenAPI)
 8. APIM MCP API (`apiType: 'mcp'`, 8 tools)
-9. Easy Auth (Entra ID token validation)
+9. AI Foundry role assignments (conditional)
 
 ## Project Structure
 
 ```
 ├── .github/workflows/    # CI/CD pipelines
-├── infra/                # Azure Bicep templates (main + 8 modules)
+├── infra/                # Azure Bicep templates (main + 9 modules)
 │   ├── main.bicep
 │   └── modules/
 │       ├── managed-identity.bicep
@@ -165,7 +215,8 @@ az deployment group create \
 │       ├── container-app.bicep
 │       ├── apim.bicep
 │       ├── apim-api.bicep      # REST API + product + subscription
-│       └── apim-mcp.bicep      # MCP server (apiType: 'mcp')
+│       ├── apim-mcp.bicep      # MCP server (apiType: 'mcp')
+│       └── apim-foundry-roles.bicep  # AI Foundry role assignments
 ├── src/app/              # FastAPI application
 ├── src/mcp_server/       # Standalone MCP server (FastMCP)
 ├── alembic/              # Database migrations

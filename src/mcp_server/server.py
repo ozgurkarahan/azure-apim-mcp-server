@@ -1,4 +1,5 @@
 """Standalone MCP server wrapping the Microelectronics Orders REST API."""
+
 import os
 
 import httpx
@@ -6,7 +7,9 @@ from mcp.server.fastmcp import FastMCP
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 
-mcp = FastMCP("Microelectronics Orders", instructions="Manage Microelectronics semiconductor orders, customers, and products.")
+mcp = FastMCP(
+    "Microelectronics Orders", instructions="Manage Microelectronics semiconductor orders, customers, and products."
+)
 
 
 def _api_url(path: str) -> str:
@@ -85,7 +88,9 @@ async def get_order(order_id: str) -> str:
 
 
 @mcp.tool()
-async def create_order(customer_id: str, items: list[dict], shipping_address: str | None = None, notes: str | None = None) -> str:
+async def create_order(
+    customer_id: str, items: list[dict], shipping_address: str | None = None, notes: str | None = None
+) -> str:
     """Create a new order. Items should be a list of dicts with 'product_id' and 'quantity' keys."""
     payload = {
         "customer_id": customer_id,

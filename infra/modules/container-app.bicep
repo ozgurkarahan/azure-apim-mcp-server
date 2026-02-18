@@ -24,11 +24,14 @@ param databaseUrl string
 @description('Application environment name.')
 param environment string = 'production'
 
-@description('Client ID of the Entra ID App Registration for Easy Auth.')
-param authClientId string
+@description('Client ID of the Entra ID App Registration for Easy Auth. Leave empty to skip auth config.')
+param authClientId string = ''
 
 @description('Principal ID of the APIM system-assigned managed identity (allowed to call this app).')
 param apimPrincipalId string
+
+@description('Tags to apply to the Container App (merged with azd discovery tags).')
+param tags object = {}
 
 // --------------------------------------------------------------------------
 // Log Analytics Workspace
@@ -67,6 +70,10 @@ resource containerAppEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' 
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: name
   location: location
+  tags: union(tags, {
+    'azd-env-name': name
+    'azd-service-name': 'api'
+  })
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
@@ -133,8 +140,9 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
 // The auth config is kept in place so it can be re-enabled by setting
 // platform.enabled: true. The openIdIssuer uses v2 format to match tokens
 // issued by StandardV2 APIM managed identity.
+// Only deployed when authClientId is provided.
 // --------------------------------------------------------------------------
-resource authConfig 'Microsoft.App/containerApps/authConfigs@2024-03-01' = {
+resource authConfig 'Microsoft.App/containerApps/authConfigs@2024-03-01' = if (!empty(authClientId)) {
   parent: containerApp
   name: 'current'
   properties: {
@@ -171,6 +179,9 @@ resource authConfig 'Microsoft.App/containerApps/authConfigs@2024-03-01' = {
     }
   }
 }
+
+@description('Name of the Container App.')
+output name string = containerApp.name
 
 @description('Fully qualified domain name of the Container App.')
 output fqdn string = containerApp.properties.configuration.ingress.fqdn

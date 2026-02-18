@@ -27,11 +27,14 @@ param postgresAdminPassword string
 @description('Container image to deploy. Use a placeholder for initial deployment.')
 param containerImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
-@description('Client ID of the Entra ID App Registration for Easy Auth (from az ad app create).')
-param authClientId string
+@description('Client ID of the Entra ID App Registration for Easy Auth. Leave empty to skip auth config.')
+param authClientId string = ''
 
 @description('Principal ID of the AI Foundry hub managed identity (for APIM role assignment). Leave empty to skip.')
 param aiFoundryPrincipalId string = ''
+
+@description('Deploy APIM API import and MCP configuration. Set to false for initial base infrastructure deployment.')
+param deployApiConfig bool = true
 
 // --------------------------------------------------------------------------
 // Variables
@@ -104,6 +107,9 @@ module containerApp 'modules/container-app.bicep' = {
     databaseUrl: databaseUrl
     authClientId: authClientId
     apimPrincipalId: apim.outputs.principalId
+    tags: {
+      'azd-env-name': environmentName
+    }
   }
 }
 
@@ -121,9 +127,9 @@ module apim 'modules/apim.bicep' = {
 }
 
 // --------------------------------------------------------------------------
-// Module: APIM API Configuration
+// Module: APIM API Configuration (conditional — requires healthy app with /openapi.json)
 // --------------------------------------------------------------------------
-module apimApi 'modules/apim-api.bicep' = {
+module apimApi 'modules/apim-api.bicep' = if (deployApiConfig) {
   name: 'apim-api'
   params: {
     apimName: apim.outputs.name
@@ -132,9 +138,9 @@ module apimApi 'modules/apim-api.bicep' = {
 }
 
 // --------------------------------------------------------------------------
-// Module: APIM Native MCP Server
+// Module: APIM Native MCP Server (conditional — requires API to be imported first)
 // --------------------------------------------------------------------------
-module apimMcp 'modules/apim-mcp.bicep' = {
+module apimMcp 'modules/apim-mcp.bicep' = if (deployApiConfig) {
   name: 'apim-mcp'
   params: {
     apimName: apim.outputs.name
@@ -148,7 +154,7 @@ module apimMcp 'modules/apim-mcp.bicep' = {
 // --------------------------------------------------------------------------
 // Module: APIM AI Foundry Role Assignments (conditional)
 // --------------------------------------------------------------------------
-module apimFoundryRoles 'modules/apim-foundry-roles.bicep' = if (!empty(aiFoundryPrincipalId)) {
+module apimFoundryRoles 'modules/apim-foundry-roles.bicep' = if (deployApiConfig && !empty(aiFoundryPrincipalId)) {
   name: 'apim-foundry-roles'
   params: {
     apimName: apim.outputs.name
@@ -172,5 +178,18 @@ output acrLoginServer string = acr.outputs.loginServer
 @description('Resource ID of the API Management instance.')
 output apimResourceId string = apim.outputs.id
 
-@description('MCP endpoint URL for AI assistant integrations.')
-output mcpEndpoint string = apimMcp.outputs.mcpEndpoint
+@description('MCP endpoint URL for AI assistant integrations (empty when deployApiConfig is false).')
+output mcpEndpoint string = deployApiConfig ? apimMcp.outputs.mcpEndpoint : ''
+
+// ---------------------------------------------------------------------------
+// azd-required outputs (captured into .azure/<env>/.env automatically)
+// ---------------------------------------------------------------------------
+
+@description('Name of the Azure Container Registry (used by azd for image push).')
+output AZURE_CONTAINER_REGISTRY_NAME string = acr.outputs.name
+
+@description('Login server endpoint of the ACR (used by azd for image push).')
+output AZURE_CONTAINER_REGISTRY_ENDPOINT string = acr.outputs.loginServer
+
+@description('Full URL of the Container App (used by postdeploy hook for health check).')
+output CONTAINER_APP_URL string = containerApp.outputs.url
