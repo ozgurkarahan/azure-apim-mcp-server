@@ -24,18 +24,17 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Deploy base Bicep infrastructure
+        env:
+          AZURE_ENV_NAME: apim-mcp-dev
+          PUBLISHER_EMAIL: ${{ secrets.PUBLISHER_EMAIL }}
+          PUBLISHER_NAME: Microelectronics Orders Admin
+          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          AUTH_CLIENT_ID: ${{ secrets.AUTH_CLIENT_ID }}
+          AI_FOUNDRY_PRINCIPAL_ID: ${{ secrets.AI_FOUNDRY_PRINCIPAL_ID }}
         run: |
           az deployment group create \
             --resource-group $RESOURCE_GROUP \
-            --template-file infra/main.bicep \
-            --parameters \
-              environmentName=apim-mcp-dev \
-              publisherEmail=${{ secrets.PUBLISHER_EMAIL }} \
-              publisherName='Microelectronics Orders Admin' \
-              postgresAdminPassword=${{ secrets.POSTGRES_ADMIN_PASSWORD }} \
-              authClientId='${{ secrets.AUTH_CLIENT_ID }}' \
-              aiFoundryPrincipalId='${{ secrets.AI_FOUNDRY_PRINCIPAL_ID }}' \
-              deployApiConfig=false
+            --parameters infra/main.bicepparam
 
   # Phase 2: Build and push Docker image (ACR now exists from Phase 1)
   build-and-push:
@@ -107,7 +106,9 @@ jobs:
   # Phase 4: Health check + full Bicep deploy with API import and MCP config
   configure-apim:
     runs-on: ubuntu-latest
-    needs: deploy-app
+    needs:
+      - deploy-app
+      - build-and-push
 
     steps:
       - name: Checkout repository
@@ -147,16 +148,16 @@ jobs:
           echo "ACR_SERVER=$ACR_SERVER" >> $GITHUB_ENV
 
       - name: Deploy full Bicep with API import and MCP config
+        env:
+          AZURE_ENV_NAME: apim-mcp-dev
+          PUBLISHER_EMAIL: ${{ secrets.PUBLISHER_EMAIL }}
+          PUBLISHER_NAME: Microelectronics Orders Admin
+          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          CONTAINER_IMAGE: ${{ env.ACR_SERVER }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
+          AUTH_CLIENT_ID: ${{ secrets.AUTH_CLIENT_ID }}
+          AI_FOUNDRY_PRINCIPAL_ID: ${{ secrets.AI_FOUNDRY_PRINCIPAL_ID }}
+          DEPLOY_API_CONFIG: "true"
         run: |
           az deployment group create \
             --resource-group $RESOURCE_GROUP \
-            --template-file infra/main.bicep \
-            --parameters \
-              environmentName=apim-mcp-dev \
-              publisherEmail=${{ secrets.PUBLISHER_EMAIL }} \
-              publisherName='Microelectronics Orders Admin' \
-              postgresAdminPassword=${{ secrets.POSTGRES_ADMIN_PASSWORD }} \
-              containerImage=$ACR_SERVER/$IMAGE_NAME:${{ needs.build-and-push.outputs.image_tag }} \
-              authClientId='${{ secrets.AUTH_CLIENT_ID }}' \
-              aiFoundryPrincipalId='${{ secrets.AI_FOUNDRY_PRINCIPAL_ID }}' \
-              deployApiConfig=true
+            --parameters infra/main.bicepparam

@@ -12,12 +12,16 @@ param publisherName = readEnvironmentVariable('PUBLISHER_NAME', 'Microelectronic
 // Required: PostgreSQL admin password. Must NOT contain '@' (breaks asyncpg connection string).
 param postgresAdminPassword = readEnvironmentVariable('POSTGRES_ADMIN_PASSWORD', '')
 
+// Container image to deploy. Defaults to placeholder for initial deployment.
+// Set CONTAINER_IMAGE env var to override (e.g., in CI/CD Phase 2 or postdeploy hook).
+param containerImage = readEnvironmentVariable('CONTAINER_IMAGE', 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest')
+
 // Optional: Entra ID App Registration client ID for Easy Auth (disabled by default).
 param authClientId = readEnvironmentVariable('AUTH_CLIENT_ID', '')
 
 // Optional: AI Foundry hub managed identity principal ID for APIM role assignment.
 param aiFoundryPrincipalId = readEnvironmentVariable('AI_FOUNDRY_PRINCIPAL_ID', '')
 
-// Deploy APIM API import + MCP config. Set to false for Phase 1 (initial infra).
-// azd uses Phase 1 (false) during provision, Phase 2 (true) via postdeploy hook.
-param deployApiConfig = false
+// Deploy APIM API import + MCP config. Phase 1 = false, Phase 2 = true.
+// Set DEPLOY_API_CONFIG=true env var to enable (postdeploy hook, CI/CD Phase 2).
+param deployApiConfig = readEnvironmentVariable('DEPLOY_API_CONFIG', 'false') == 'true'

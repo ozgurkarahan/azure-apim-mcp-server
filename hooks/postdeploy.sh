@@ -51,23 +51,18 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
 done
 
 # Run Phase 2 Bicep deployment with deployApiConfig=true
+# Uses main.bicepparam which reads all parameters from environment variables.
+# azd exports all .env values as env vars for hooks, so AZURE_ENV_NAME,
+# PUBLISHER_EMAIL, etc. are already available. We just set DEPLOY_API_CONFIG=true.
 echo ""
 echo "Deploying Phase 2 Bicep (deployApiConfig=true)..."
 
 RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-rg-${AZURE_ENV_NAME}}"
+export DEPLOY_API_CONFIG=true
 
 az deployment group create \
   --resource-group "$RESOURCE_GROUP" \
-  --template-file ./infra/main.bicep \
-  --parameters \
-    environmentName="$AZURE_ENV_NAME" \
-    location="$AZURE_LOCATION" \
-    publisherEmail="$PUBLISHER_EMAIL" \
-    publisherName="${PUBLISHER_NAME:-Microelectronics Orders}" \
-    postgresAdminPassword="$POSTGRES_ADMIN_PASSWORD" \
-    authClientId="${AUTH_CLIENT_ID:-}" \
-    aiFoundryPrincipalId="${AI_FOUNDRY_PRINCIPAL_ID:-}" \
-    deployApiConfig=true \
+  --parameters ./infra/main.bicepparam \
   --name "phase2-$(date +%Y%m%d%H%M%S)" \
   --verbose
 
