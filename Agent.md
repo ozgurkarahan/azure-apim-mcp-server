@@ -172,9 +172,12 @@ az postgres flexible-server show --resource-group $RG --name $PG_NAME \
 # Expected: {"state": "Ready", "version": "16"}
 
 # APIM APIs — verify both REST API and MCP API exist
-az apim api list --resource-group $RG --service-name $APIM_NAME \
-  --query "[].{name: name, path: path}" -o table
-# Expected: two rows:
+# Note: `az apim api list` uses a GA API version that does NOT return MCP-type APIs.
+# Use `az rest` with the preview API version instead:
+az rest --method get \
+  --uri "https://management.azure.com/subscriptions/$(az account show --query id -o tsv)/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$APIM_NAME/apis?api-version=2025-03-01-preview" \
+  --query "value[].{name: name, path: properties.path}" -o table
+# Expected rows include:
 #   st-orders-api   orders
 #   st-orders-mcp   st-orders-mcp
 ```
