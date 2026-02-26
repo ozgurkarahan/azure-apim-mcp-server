@@ -1,9 +1,7 @@
-# CLAUDE.md — azure-apim-mcp-server
+# AGENT.md — azure-apim-mcp-server
 
 ## Project Overview
 Microelectronics semiconductor orders API deployed to Azure Container Apps, exposed through Azure API Management (StandardV2) as both a REST API and MCP (Model Context Protocol) server.
-
-> **See also**: `Agent.md` — condensed agent instructions with a 5-layer deployment verification checklist (health checks, infrastructure, REST API, MCP, end-to-end data flow).
 
 ## Architecture
 
@@ -279,7 +277,7 @@ curl -X POST ... -d '{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"na
 
 ## Project Structure
 ```
-├── Agent.md              # Condensed agent instructions + deployment verification
+├── AGENT.md              # Project instructions for code agents
 ├── .github/workflows/    # CI (lint+test) and Deploy (4-phase pipeline)
 ├── hooks/                # azd lifecycle hooks (postdeploy = Phase 2 Bicep)
 ├── infra/                # Azure Bicep templates (main + 8 modules)

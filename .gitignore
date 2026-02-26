@@ -50,3 +50,6 @@ alembic/versions/__pycache__/
 
 # mypy
 .mypy_cache/
+
+# Claude Code
+.claude/
